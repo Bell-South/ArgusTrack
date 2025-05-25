@@ -1,0 +1,60 @@
+# examples/config_examples/stereo_config.yaml (NEW FILE)
+
+# Stereo tracker configuration
+track_thresh: 0.5          # Minimum detection confidence for tracking
+match_thresh: 0.8          # Minimum IoU for track-detection matching
+track_buffer: 50           # Frames to keep lost tracks before removal
+min_box_area: 100.0        # Minimum bounding box area to consider
+static_threshold: 2.0      # Maximum pixel movement for static classification
+min_static_frames: 5       # Minimum frames to confirm static object
+
+# Stereo-specific parameters
+stereo_mode: true          # Enable stereo processing
+stereo_match_threshold: 0.7 # IoU threshold for stereo matching
+max_stereo_distance: 100.0  # Max pixel distance for stereo matching
+gps_frame_interval: 6       # Process every Nth frame (60fps -> 10fps GPS)
+
+# YOLOv11 detector configuration
+detector:
+  model_type: "yolov11"
+  model_path: "models/yolov11n.pt"  # Path to YOLOv11 model
+  confidence_threshold: 0.5
+  nms_threshold: 0.4
+  target_classes:
+    - "traffic light"
+    - "stop sign" 
+    - "pole"           # Generic pole class
+    - "street light"   # If available in custom model
+    - "light post"     # If available in custom model
+
+# Stereo camera calibration
+stereo_calibration:
+  calibration_file: "calibration/stereo_calibration.pkl"  # Path to calibration pickle
+  baseline: 0.12             # Baseline distance in meters (GoPro setup)
+  image_width: 1920
+  image_height: 1080
+  
+# GPS processing
+gps:
+  coordinate_system: "WGS84"
+  accuracy_threshold: 5.0    # Ignore GPS points with accuracy > 5m
+  outlier_threshold: 30.0    # Remove GPS points > 30m from cluster
+
+# Performance settings
+performance:
+  max_track_age: 100         # Maximum track age in frames
+  min_track_length: 3        # Minimum track length to save
+  gpu_backend: "auto"        # auto, cpu, cuda
+  
+# Output settings
+output:
+  save_video: true           # Save visualization video
+  save_geojson: true         # Export locations to GeoJSON
+  save_json: true            # Save complete tracking results
+  video_codec: "mp4v"        # Video codec for output
+  
+# Geolocation accuracy targets
+accuracy:
+  target_precision: 2.0      # Target geolocation precision in meters
+  min_reliability: 0.7       # Minimum reliability score to export location
+  static_detection_frames: 10 # Frames needed for reliable static detection

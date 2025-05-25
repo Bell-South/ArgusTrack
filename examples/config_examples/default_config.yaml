@@ -1,0 +1,27 @@
+# Default tracker configuration
+track_thresh: 0.5          # Minimum detection confidence for tracking
+match_thresh: 0.8          # Minimum IoU for track-detection matching
+track_buffer: 50           # Frames to keep lost tracks before removal
+min_box_area: 100.0        # Minimum bounding box area to consider
+static_threshold: 2.0      # Maximum pixel movement for static classification
+min_static_frames: 5       # Minimum frames to confirm static object
+
+# Detector configuration
+detector:
+  confidence_threshold: 0.5
+  nms_threshold: 0.4
+  target_classes:
+    - light_post
+    - street_light
+    - pole
+    - traffic_light
+
+# Camera calibration (optional)
+camera:
+  calibration_file: null   # Path to camera calibration JSON
+  
+# Performance settings
+performance:
+  max_track_age: 100       # Maximum track age in frames
+  min_track_length: 3      # Minimum track length to save
+  gpu_backend: cpu         # cpu, cuda, or opencl
