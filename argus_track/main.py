@@ -20,21 +20,20 @@ from argus_track.utils import setup_logging, load_gps_data
 from argus_track.utils.gps_extraction import extract_gps_from_stereo_videos, save_gps_to_csv
 from argus_track.stereo import StereoCalibrationManager
 
-
 def create_detector(detector_type: str, 
-                   model_path: Optional[str] = None,
-                   target_classes: Optional[list] = None):
+                    model_path: Optional[str] = None,
+                    target_classes: Optional[list] = None,
+                    confidence_threshold: float = 0.5,
+                    device: str = 'auto'):
     """Create detector based on type"""
-    if target_classes is None:
-        target_classes = ['traffic light', 'stop sign', 'pole', 'light_post']
     
     if detector_type == 'yolov11' and model_path:
         try:
             return YOLOv11Detector(
                 model_path=model_path,
                 target_classes=target_classes,
-                confidence_threshold=0.5,
-                device='auto'
+                confidence_threshold=confidence_threshold,
+                device=device
             )
         except Exception as e:
             logging.warning(f"Failed to load YOLOv11: {e}, falling back to mock detector")
@@ -61,26 +60,25 @@ def create_detector(detector_type: str,
     else:
         return MockDetector(target_classes=target_classes)
 
-
 def main():
     """Main function for enhanced stereo light post tracking with GPS extraction"""
     parser = argparse.ArgumentParser(
         description=f"Argus Track: Enhanced Stereo Light Post Tracking System v{__version__}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-    Examples:
-        # Enhanced stereo tracking with automatic GPS extraction
-        argus_track --stereo left.mp4 right.mp4 --calibration stereo.pkl --detector yolov11 --model yolov11n.pt --auto-gps
-        
-        # Stereo tracking with existing GPS file
-        argus_track --stereo left.mp4 right.mp4 --calibration stereo.pkl --gps gps.csv
-        
-        # Extract GPS only (no tracking)
-        argus_track --extract-gps-only left.mp4 right.mp4 --output gps_data.csv
-        
-        # Monocular tracking (legacy mode)
-        argus_track input.mp4 --detector yolo --model yolov4.weights
-        """
+            Examples:
+                # Enhanced stereo tracking with automatic GPS extraction
+                argus_track --stereo left.mp4 right.mp4 --calibration stereo.pkl --detector yolov11 --model yolov11n.pt --auto-gps
+                
+                # Stereo tracking with existing GPS file
+                argus_track --stereo left.mp4 right.mp4 --calibration stereo.pkl --gps gps.csv
+                
+                # Extract GPS only (no tracking)
+                argus_track --extract-gps-only left.mp4 right.mp4 --output gps_data.csv
+                
+                # Monocular tracking (legacy mode)
+                argus_track input.mp4 --detector yolo --model yolov4.weights
+            """
     )
     
     # Video input arguments
@@ -112,7 +110,9 @@ def main():
                        help='Detector type to use')
     parser.add_argument('--model', type=str,
                        help='Path to detection model file')
-    
+    parser.add_argument('--target-classes', nargs="*", default=None, 
+                        help="Optional: space-separated list of target class names. If not set, uses all model classes.")
+
     # Output options
     parser.add_argument('--output', type=str,
                        help='Path for output video or GPS CSV file')
@@ -234,9 +234,11 @@ def main():
     # Initialize detector
     try:
         detector = create_detector(
-            args.detector, 
-            args.model,
-            target_classes=['traffic light', 'stop sign', 'pole']
+            detector_type=args.detector,
+            model_path=args.model,
+            target_classes=args.target_classes,
+            confidence_threshold=args.track_thresh,  # 👈 from CLI
+            device='auto'  # or expose this as --device if needed
         )
         logger.info(f"Initialized {args.detector} detector")
     except Exception as e:
@@ -246,6 +248,7 @@ def main():
     # Process videos
     try:
         if stereo_mode:
+            
             # Initialize enhanced stereo tracker
             tracker = EnhancedStereoLightPostTracker(
                 config=config,

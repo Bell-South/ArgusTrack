@@ -48,9 +48,12 @@ class KalmanBoxTracker:
             [0, 0, 0, 1, 0, 0, 0, 0]   # h
         ])
         
-        # Initialize state with detection
-        self.kf.x[:4] = initial_detection.xywh
-        self.kf.x[4:] = 0  # Zero initial velocity (static assumption)
+        xywh = initial_detection.xywh
+        self.kf.x[0] = xywh[0]  # center x
+        self.kf.x[1] = xywh[1]  # center y
+        self.kf.x[2] = xywh[2]  # width
+        self.kf.x[3] = xywh[3]  # height
+        self.kf.x[4:] = 0       # Zero initial velocity (static assumption)
         
         # Initial uncertainty (higher for velocities)
         self.kf.P[4:, 4:] *= 1000  # High uncertainty for velocities
@@ -98,7 +101,7 @@ class KalmanBoxTracker:
         
         # Perform Kalman update
         self.kf.update(detection.xywh)
-        
+
     def get_state(self) -> np.ndarray:
         """
         Get current state estimate
@@ -106,7 +109,7 @@ class KalmanBoxTracker:
         Returns:
             Bounding box in tlbr format
         """
-        x, y, w, h = self.kf.x[:4]
+        x, y, w, h = self.kf.x[:4].flatten()  # Add .flatten() to fix shape
         return np.array([
             x - w/2,  # x1
             y - h/2,  # y1

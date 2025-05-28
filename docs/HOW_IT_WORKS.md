@@ -221,11 +221,14 @@ stereo_calibration = StereoCalibrationConfig.from_pickle(
 )
 
 # Initialize detector
-detector = YOLOv11Detector(
-    model_path='yolov11n.pt',
-    target_classes=['traffic light', 'stop sign', 'pole'],
-    device='auto'
+detector = create_detector(
+    detector_type=args.detector,
+    model_path=args.model,
+    target_classes=args.target_classes,
+    confidence_threshold=args.track_thresh,  # 👈 from CLI
+    device='auto'  # or expose this as --device if needed
 )
+
 
 # Initialize tracker
 tracker = StereoLightPostTracker(

@@ -56,7 +56,7 @@ class EnhancedStereoLightPostTracker:
         self.calibration_manager = StereoCalibrationManager(stereo_calibration)
         self.stereo_matcher = StereoMatcher(
             calibration=stereo_calibration,
-            epipolar_threshold=2.0,
+            epipolar_threshold=16.0,
             iou_threshold=config.stereo_match_threshold
         )
         self.triangulator = StereoTriangulator(stereo_calibration)
@@ -279,7 +279,7 @@ class EnhancedStereoLightPostTracker:
                                   frame_id: int,
                                   gps_data: Optional[GPSData]) -> Optional[StereoFrame]:
         """Process a single stereo frame pair"""
-        
+
         # Rectify images if calibration supports it
         if self.config.stereo_mode:
             left_rect, right_rect = self.calibration_manager.rectify_image_pair(
@@ -290,6 +290,7 @@ class EnhancedStereoLightPostTracker:
         
         # Detect objects in both frames
         left_detections = self._detect_objects(left_rect, frame_id, 'left')
+        
         right_detections = self._detect_objects(right_rect, frame_id, 'right')
         
         if not left_detections and not right_detections:

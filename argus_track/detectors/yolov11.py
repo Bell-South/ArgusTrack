@@ -50,10 +50,23 @@ class YOLOv11Detector(ObjectDetector):
         
         # Load model
         self.model = self._load_model()
-        
-        # Class names (YOLOv11 typically uses COCO classes)
-        self.class_names = self._get_coco_classes()
-        self.target_classes = target_classes or self.class_names
+        # Get class names directly from the loaded model
+        self.class_names = list(self.model.names.values())
+
+        # If no target_classes specified, use ALL classes from the model
+        if target_classes is None:
+            self.target_classes = self.class_names.copy()
+            self.logger.info(f"Using all model classes: {self.target_classes}")
+        else:
+            # Filter to only valid classes that exist in the model
+            valid_classes = [cls for cls in target_classes if cls in self.class_names]
+            if not valid_classes:
+                self.logger.warning(f"None of the target classes {target_classes} found in model. Using all model classes.")
+                self.target_classes = self.class_names.copy()
+            else:
+                self.target_classes = valid_classes
+                self.logger.info(f"Using filtered target classes: {self.target_classes}")
+    
         
         # Target class indices
         self.target_class_indices = [
@@ -125,41 +138,57 @@ class YOLOv11Detector(ObjectDetector):
         except Exception as e:
             self.logger.error(f"Detection failed: {e}")
             return []
-    
+        
+    # Edit argus_track/detectors/yolov11.py
     def _detect_ultralytics(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """Detection using ultralytics YOLO"""
+        
+        # print(f"🔍 DETECTION CALLED: Frame shape {frame.shape}")
+        # self.logger.info(f"🔍 DETECTION CALLED: Frame shape {frame.shape}")
+        
         # Run inference
         results = self.model.predict(
             frame, 
-            conf=self.confidence_threshold,
+            conf=0.001,  # Force very low confidence
             iou=self.nms_threshold,
             verbose=False
         )
         
         detections = []
         
+        # print(f"🔍 MODEL RESULTS: {len(results)} results")
+        # self.logger.info(f"🔍 MODEL RESULTS: {len(results)} results")
+        
         if results and len(results) > 0:
-            result = results[0]  # First result
+            result = results[0]
             
             if result.boxes is not None:
-                boxes = result.boxes.xyxy.cpu().numpy()  # x1, y1, x2, y2
+                boxes = result.boxes.xyxy.cpu().numpy()
                 scores = result.boxes.conf.cpu().numpy()
                 classes = result.boxes.cls.cpu().numpy().astype(int)
                 
-                for box, score, cls_id in zip(boxes, scores, classes):
-                    # Filter by target classes
-                    if cls_id in self.target_class_indices:
-                        class_name = self.class_names[cls_id]
+                # print(f"🔍 RAW DETECTIONS: {len(boxes)} boxes")
+                # self.logger.info(f"🔍 RAW DETECTIONS: {len(boxes)} boxes")
+                
+                for i, (box, score, cls_id) in enumerate(zip(boxes, scores, classes)):
+                    if cls_id in [0, 1]:  # Led-150 or Led-240
+                        class_name = f"Led-{150 if cls_id == 0 else 240}"
                         
-                        detections.append({
-                            'bbox': box.tolist(),  # [x1, y1, x2, y2]
-                            'score': float(score),
-                            'class_name': class_name,
-                            'class_id': cls_id
-                        })
+                        if score >= self.confidence_threshold:
+                            detections.append({
+                                'bbox': box.tolist(),
+                                'score': float(score),
+                                'class_name': class_name,
+                                'class_id': cls_id
+                            })
+                            
+                            # print(f"✅ KEPT: {class_name}, Conf: {score:.4f}")
+                            # self.logger.info(f"✅ KEPT: {class_name}, Conf: {score:.4f}")
         
+        # print(f"🔍 FINAL: {len(detections)} detections returned")
+        # self.logger.info(f"🔍 FINAL: {len(detections)} detections returned")
         return detections
-    
+
     def _detect_torch(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """Detection using pure PyTorch model"""
         # Preprocess image

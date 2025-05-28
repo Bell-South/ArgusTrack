@@ -340,6 +340,28 @@ class GoProGPSExtractor:
         try:
             # Clean the string
             coord_str = coord_str.strip()
+            
+            # Handle the format: "34 deg 39' 45.72" S"
+            import re
+            # Pattern for: "34 deg 39' 45.72" S"
+            pattern = r"(\d+)\s+deg\s+(\d+)'\s+([\d.]+)\"\s*([NSEW])"
+            match = re.search(pattern, coord_str)
+            
+            if match:
+                degrees = float(match.group(1))
+                minutes = float(match.group(2))
+                seconds = float(match.group(3))
+                direction = match.group(4)
+                
+                # Convert to decimal degrees
+                decimal = degrees + minutes/60.0 + seconds/3600.0
+                
+                # Apply sign based on direction
+                if direction in ['S', 'W']:
+                    decimal = -decimal
+                    
+                return decimal
+            
             if coord_str.startswith('<'):
                 coord_str = coord_str[1:]
             if coord_str.endswith('>'):

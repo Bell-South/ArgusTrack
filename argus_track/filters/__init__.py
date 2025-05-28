@@ -1,5 +1,4 @@
 """Motion filters for tracking"""
+from .kalman import KalmanBoxTracker, batch_predict_kalman
 
-from .kalman import KalmanBoxTracker
-
-__all__ = ["KalmanBoxTracker"]
+__all__ = ["KalmanBoxTracker", "batch_predict_kalman"]
