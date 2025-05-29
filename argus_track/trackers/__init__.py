@@ -1,6 +1,7 @@
 """Tracking algorithms"""
 
 from .bytetrack import ByteTrack
-from .lightpost_tracker import LightPostTracker
+from .stereo_lightpost_tracker import EnhancedStereoLightPostTracker
+from .lightpost_tracker import EnhancedLightPostTracker
 
-__all__ = ["ByteTrack", "LightPostTracker"]
+__all__ = ["ByteTrack", "EnhancedLightPostTracker",  "EnhancedStereoLightPostTracker"]

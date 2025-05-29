@@ -1,10 +1,12 @@
-"""Visualization utilities"""
+# argus_track/utils/visualization.py (UPDATED with real-time display)
+"""Enhanced visualization utilities with real-time display"""
 
 import cv2
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 import matplotlib.pyplot as plt
 import seaborn as sns
+import time
 
 from ..core import Track, Detection
 
@@ -17,13 +19,379 @@ TRACK_COLORS = {
     'removed': (128, 128, 128)     # Gray
 }
 
+# Class-specific colors
+CLASS_COLORS = {
+    'Led-150': (255, 0, 0),       # Red
+    'Led-240': (0, 0, 255),       # Blue
+    'light_post': (0, 255, 0),    # Green
+    'street_light': (255, 165, 0), # Orange
+    'pole': (128, 0, 128)          # Purple
+}
+
+
+class RealTimeVisualizer:
+    """Real-time visualization during tracking"""
+    
+    def __init__(self, window_name: str = "Argus Track - Real-time Detection", 
+                 display_size: Tuple[int, int] = (1280, 720),
+                 show_info_panel: bool = True):
+        """
+        Initialize real-time visualizer
+        
+        Args:
+            window_name: Name of the display window
+            display_size: Size of the display window (width, height)
+            show_info_panel: Whether to show information panel
+        """
+        self.window_name = window_name
+        self.display_size = display_size
+        self.show_info_panel = show_info_panel
+        
+        # FIX: Add missing logger
+        import logging
+        self.logger = logging.getLogger(f"{__name__}.RealTimeVisualizer")
+        
+        # Statistics tracking
+        self.frame_count = 0
+        self.detection_history = []
+        self.fps_history = []
+        self.last_time = time.time()
+        
+        # Create window
+        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(self.window_name, display_size[0], display_size[1])
+        
+        print(f"🖥️  Real-time visualization window opened: {window_name}")
+        print("   Press 'q' to quit, 'p' to pause, 's' to save screenshot")
+
+    def visualize_frame(self, frame: np.ndarray, 
+                    detections: List[Detection],
+                    tracks: List[Track],
+                    gps_data: Optional[Dict] = None,
+                    frame_info: Optional[Dict] = None) -> bool:
+        """
+        Visualize a single frame with detections and tracks
+        Returns False if user wants to quit, True otherwise
+        """
+        if frame is None:
+            print("[DEBUG] visualize_frame received None frame, skipping visualization.")
+            return True  # Continue, or set to False if you want to quit on error
+
+        self.frame_count += 1
+
+        vis_frame = self._create_visualization(frame, detections, tracks, gps_data, frame_info)
+        if vis_frame is None:
+            print("[DEBUG] _create_visualization returned None, skipping frame display.")
+            return True
+
+        current_time = time.time()
+        fps = 1.0 / max(0.001, current_time - self.last_time)
+        self.fps_history.append(fps)
+        self.last_time = current_time
+
+        if len(self.fps_history) > 30:
+            self.fps_history = self.fps_history[-30:]
+
+        avg_fps = np.mean(self.fps_history)
+        cv2.putText(vis_frame, f"FPS: {avg_fps:.1f}", (10, 30), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        cv2.imshow(self.window_name, vis_frame)
+
+        key = cv2.waitKey(1) & 0xFF
+
+        if key == ord('q'):
+            return False
+        elif key == ord('p'):
+            print("⏸️  Paused - Press any key to continue...")
+            cv2.waitKey(0)
+        elif key == ord('s'):
+            screenshot_name = f"argus_track_screenshot_{self.frame_count:06d}.jpg"
+            cv2.imwrite(screenshot_name, vis_frame)
+            print(f"📸 Screenshot saved: {screenshot_name}")
+
+        return True
+
+    # def visualize_frame(self, frame: np.ndarray, 
+    #                    detections: List[Detection],
+    #                    tracks: List[Track],
+    #                    gps_data: Optional[Dict] = None,
+    #                    frame_info: Optional[Dict] = None) -> bool:
+    #     """
+    #     Visualize a single frame with detections and tracks
+        
+    #     Args:
+    #         frame: Input frame
+    #         detections: Raw detections for this frame
+    #         tracks: Active tracks
+    #         gps_data: Optional GPS data
+    #         frame_info: Optional frame information
+            
+    #     Returns:
+    #         False if user wants to quit, True otherwise
+    #     """
+    #     self.frame_count += 1
+        
+    #     # Create visualization
+    #     vis_frame = self._create_visualization(frame, detections, tracks, gps_data, frame_info)
+        
+    #     # Calculate FPS
+    #     current_time = time.time()
+    #     fps = 1.0 / max(0.001, current_time - self.last_time)
+    #     self.fps_history.append(fps)
+    #     self.last_time = current_time
+        
+    #     # Keep only recent FPS values
+    #     if len(self.fps_history) > 30:
+    #         self.fps_history = self.fps_history[-30:]
+        
+    #     # Add FPS overlay
+    #     avg_fps = np.mean(self.fps_history)
+    #     cv2.putText(vis_frame, f"FPS: {avg_fps:.1f}", (10, 30), 
+    #                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+    #     # Display frame
+    #     cv2.imshow(self.window_name, vis_frame)
+        
+    #     # Handle keyboard input
+    #     key = cv2.waitKey(1) & 0xFF
+        
+    #     if key == ord('q'):
+    #         return False  # Quit
+    #     elif key == ord('p'):
+    #         # Pause - wait for another key press
+    #         print("⏸️  Paused - Press any key to continue...")
+    #         cv2.waitKey(0)
+    #     elif key == ord('s'):
+    #         # Save screenshot
+    #         screenshot_name = f"argus_track_screenshot_{self.frame_count:06d}.jpg"
+    #         cv2.imwrite(screenshot_name, vis_frame)
+    #         print(f"📸 Screenshot saved: {screenshot_name}")
+        
+    #     return True  # Continue
+    
+    def _create_visualization(self, frame: np.ndarray,
+                             detections: List[Detection],
+                             tracks: List[Track],
+                             gps_data: Optional[Dict] = None,
+                             frame_info: Optional[Dict] = None) -> np.ndarray:
+        """Create comprehensive visualization frame"""
+        print(f"[DEBUG] In _create_visualization, frame is None: {frame is None}, shape: {getattr(frame, 'shape', None)}")
+        if frame is None:
+            print("WARNING: Frame is None in _create_visualization, skipping frame.")
+            return None
+        # Resize frame to display size if needed
+        vis_frame = self._resize_frame(frame)
+        
+        # Calculate scale factors for coordinate adjustment
+        scale_x = vis_frame.shape[1] / frame.shape[1]
+        scale_y = vis_frame.shape[0] / frame.shape[0]
+        
+        # Draw raw detections first (lighter overlay)
+        vis_frame = self._draw_detections(vis_frame, detections, scale_x, scale_y)
+        
+        # Draw tracks (more prominent)
+        vis_frame = self._draw_tracks(vis_frame, tracks, scale_x, scale_y)
+        
+        # Add information panels
+        if self.show_info_panel:
+            print(f"[DEBUG] Before _add_info_panel, frame is None: {frame is None}, shape: {getattr(frame, 'shape', None)}")
+            vis_frame = self._add_info_panel(vis_frame, detections, tracks, gps_data, frame_info)
+            print(f"[DEBUG] After _add_info_panel, frame is None: {frame is None}, shape: {getattr(frame, 'shape', None)}")
+        
+        return vis_frame
+    
+    def _resize_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Resize frame to display size - DEFENSIVE"""
+        try:
+            if frame is None or len(frame.shape) != 3:
+                return np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+            if frame.shape[:2] == (self.display_size[1], self.display_size[0]):
+                return frame.copy()
+            return cv2.resize(frame, self.display_size)
+        except Exception as e:
+            self.logger.error(f"Error resizing frame: {e}")
+            return np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+
+    def _draw_detections(self, frame: np.ndarray, detections: List['Detection'],
+                        scale_x: float, scale_y: float) -> np.ndarray:
+        """Draw raw detections with semi-transparent overlay"""
+        if frame is None or len(frame.shape) != 3:
+            return np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+        overlay = frame.copy()
+        for detection in detections:
+            bbox = detection.bbox
+            x1, y1, x2, y2 = bbox
+            x1, x2 = int(x1 * scale_x), int(x2 * scale_x)
+            y1, y2 = int(y1 * scale_y), int(y2 * scale_y)
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), (255, 255, 255), 1)
+            conf_text = f"{detection.score:.2f}"
+            cv2.putText(overlay, conf_text, (x1, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        return cv2.addWeighted(frame, 0.8, overlay, 0.2, 0)
+
+    def _draw_tracks(self, frame: np.ndarray, tracks: List['Track'],
+                    scale_x: float, scale_y: float) -> np.ndarray:
+        if frame is None or len(frame.shape) != 3:
+            return np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+        for track in tracks:
+            color = TRACK_COLORS.get(track.state, (255, 255, 255))
+            bbox = track.to_tlbr()
+            x1, y1, x2, y2 = bbox
+            x1, x2 = int(x1 * scale_x), int(x2 * scale_x)
+            y1, y2 = int(y1 * scale_y), int(y2 * scale_y)
+            thickness = 3 if track.state == 'confirmed' else 2
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+            track_info = f"ID:{track.track_id} H:{track.hits}"
+            if track.state == 'confirmed':
+                track_info += " ✓"
+            text_size = cv2.getTextSize(track_info, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+            cv2.rectangle(frame, (x1, y1 - text_size[1] - 8),
+                        (x1 + text_size[0] + 4, y1), color, -1)
+            cv2.putText(frame, track_info, (x1 + 2, y1 - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            # Draw trajectory if present
+            if track.state == 'confirmed' and len(track.detections) > 1:
+                self._draw_trajectory(frame, track, scale_x, scale_y, color)
+        return frame
+
+    def _draw_trajectory(self, frame: np.ndarray, track: Track,
+                        scale_x: float, scale_y: float, color: Tuple[int, int, int]):
+        """Draw track trajectory"""
+        # Get recent detection centers
+        recent_detections = track.detections[-min(10, len(track.detections)):]
+        
+        if len(recent_detections) < 2:
+            return
+        
+        points = []
+        for detection in recent_detections:
+            center = detection.center
+            scaled_center = (int(center[0] * scale_x), int(center[1] * scale_y))
+            points.append(scaled_center)
+        
+        # Draw trajectory lines
+        for i in range(1, len(points)):
+            cv2.line(frame, points[i-1], points[i], color, 2)
+        
+        # Draw trajectory points
+        for i, point in enumerate(points):
+            radius = 3 if i == len(points) - 1 else 2  # Larger for current position
+            cv2.circle(frame, point, radius, color, -1)
+
+    def _add_info_panel(self, frame: np.ndarray,
+                        detections: list,
+                        tracks: list,
+                        gps_data: dict = None,
+                        frame_info: dict = None) -> np.ndarray:
+        if frame is None or len(frame.shape) != 3:
+            print("WARNING: Frame is None in _add_info_panel")
+            frame = np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+        panel_height = 140
+        panel_width = 320
+        try:
+            overlay = frame.copy()
+        except Exception:
+            overlay = np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+        cv2.rectangle(
+            overlay, (frame.shape[1] - panel_width - 10, 10),
+            (frame.shape[1] - 10, panel_height + 10), (0, 0, 0), -1
+        )
+        frame = cv2.addWeighted(frame, 0.7, overlay, 0.3, 0)
+        y_offset = 35
+        text_color = (255, 255, 255)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5
+        active_tracks = [t for t in tracks if getattr(t, 'state', None) in ['tentative', 'confirmed']]
+        confirmed_tracks = [t for t in tracks if getattr(t, 'state', None) == 'confirmed']
+        info_lines = [
+            f"Frame: {getattr(self, 'frame_count', 0)}",
+            f"Detections: {len(detections)}",
+            f"Active Tracks: {len(active_tracks)}",
+            f"Confirmed: {len(confirmed_tracks)}",
+        ]
+        if detections:
+            best_detection = max(detections, key=lambda d: getattr(d, 'score', 0))
+            info_lines.append(f"Best: {getattr(best_detection, 'score', 0):.3f}")
+        if gps_data:
+            info_lines.append(f"GPS: {gps_data.get('latitude', 0):.5f}")
+            info_lines.append(f"     {gps_data.get('longitude', 0):.5f}")
+        for i, line in enumerate(info_lines):
+            y_pos = y_offset + i * 18
+            cv2.putText(
+                frame, line, (frame.shape[1] - panel_width + 5, y_pos),
+                font, font_scale, text_color, 1
+            )
+        return frame
+
+    def _create_visualization(self, frame: np.ndarray,
+                            detections: list,
+                            tracks: list,
+                            gps_data: dict = None,
+                            frame_info: dict = None) -> np.ndarray:
+        # Ensure starting frame is always valid
+        if frame is None or not hasattr(frame, 'shape') or len(frame.shape) != 3:
+            frame = np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+            cv2.putText(frame, "NO FRAME DATA", (400, 360),
+                    cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 3)
+        vis_frame = self._resize_frame(frame)
+        if vis_frame is None or not hasattr(vis_frame, 'shape') or len(vis_frame.shape) != 3:
+            vis_frame = np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+        scale_x = vis_frame.shape[1] / max(1, frame.shape[1])
+        scale_y = vis_frame.shape[0] / max(1, frame.shape[0])
+
+        vis_frame = self._draw_detections(vis_frame, detections, scale_x, scale_y)
+        if vis_frame is None or not hasattr(vis_frame, 'shape') or len(vis_frame.shape) != 3:
+            vis_frame = np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+
+        vis_frame = self._draw_tracks(vis_frame, tracks, scale_x, scale_y)
+        if vis_frame is None or not hasattr(vis_frame, 'shape') or len(vis_frame.shape) != 3:
+            vis_frame = np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+
+        if self.show_info_panel:
+            vis_frame = self._add_info_panel(vis_frame, detections, tracks, gps_data, frame_info)
+            if vis_frame is None or not hasattr(vis_frame, 'shape') or len(vis_frame.shape) != 3:
+                vis_frame = np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+
+        return vis_frame
+
+    def _resize_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Resize frame to display size - FIXED"""
+        # FIX: Handle None or invalid frame
+        if frame is None:
+            return np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+        
+        if len(frame.shape) != 3:
+            self.logger.error(f"Invalid frame shape: {frame.shape}")
+            return np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+        
+        if frame.shape[:2] == (self.display_size[1], self.display_size[0]):
+            return frame.copy()
+        
+        try:
+            return cv2.resize(frame, self.display_size)
+        except Exception as e:
+            self.logger.error(f"Error resizing frame: {e}")
+            return np.zeros((self.display_size[1], self.display_size[0], 3), dtype=np.uint8)
+
+    def close(self):
+        """Close the visualization window"""
+        cv2.destroyWindow(self.window_name)
+        print(f"🖥️  Closed visualization window")
+        
+        # Print final statistics
+        if self.fps_history:
+            avg_fps = np.mean(self.fps_history)
+            print(f"📊 Average FPS: {avg_fps:.1f}")
+            print(f"📊 Total frames processed: {self.frame_count}")
+
 
 def draw_tracks(frame: np.ndarray, tracks: List[Track], 
                 show_trajectory: bool = True,
                 show_id: bool = True,
                 show_state: bool = True) -> np.ndarray:
     """
-    Draw tracks on frame
+    Draw tracks on frame (existing function - now enhanced)
     
     Args:
         frame: Input frame
@@ -35,6 +403,7 @@ def draw_tracks(frame: np.ndarray, tracks: List[Track],
     Returns:
         Frame with track visualizations
     """
+
     vis_frame = frame.copy()
     
     for track in tracks:
@@ -43,7 +412,8 @@ def draw_tracks(frame: np.ndarray, tracks: List[Track],
         
         # Draw bounding box
         x1, y1, x2, y2 = track.to_tlbr().astype(int)
-        cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 2)
+        thickness = 3 if track.state == 'confirmed' else 2
+        cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, thickness)
         
         # Draw track information
         if show_id or show_state:
@@ -82,7 +452,7 @@ def draw_tracks(frame: np.ndarray, tracks: List[Track],
     
     return vis_frame
 
-
+# Additional utility function
 def create_track_overlay(frame: np.ndarray, tracks: List[Track],
                         alpha: float = 0.3) -> np.ndarray:
     """
@@ -115,152 +485,3 @@ def create_track_overlay(frame: np.ndarray, tracks: List[Track],
     result = cv2.addWeighted(frame, 1 - alpha, overlay, alpha, 0)
     
     return result
-
-
-def plot_track_statistics(tracks: Dict[int, Track], 
-                         save_path: Optional[str] = None) -> None:
-    """
-    Plot tracking statistics
-    
-    Args:
-        tracks: Dictionary of all tracks
-        save_path: Optional path to save plot
-    """
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    
-    # Track lengths
-    track_lengths = [track.age for track in tracks.values()]
-    axes[0, 0].hist(track_lengths, bins=20, edgecolor='black')
-    axes[0, 0].set_title('Track Length Distribution')
-    axes[0, 0].set_xlabel('Track Length (frames)')
-    axes[0, 0].set_ylabel('Count')
-    
-    # Track states
-    state_counts = {}
-    for track in tracks.values():
-        state = track.state
-        state_counts[state] = state_counts.get(state, 0) + 1
-    
-    axes[0, 1].bar(state_counts.keys(), state_counts.values())
-    axes[0, 1].set_title('Track State Distribution')
-    axes[0, 1].set_xlabel('State')
-    axes[0, 1].set_ylabel('Count')
-    
-    # Hits distribution
-    hits_counts = [track.hits for track in tracks.values()]
-    axes[1, 0].hist(hits_counts, bins=20, edgecolor='black')
-    axes[1, 0].set_title('Track Hits Distribution')
-    axes[1, 0].set_xlabel('Number of Hits')
-    axes[1, 0].set_ylabel('Count')
-    
-    # Time since update for lost tracks
-    lost_times = [track.time_since_update for track in tracks.values() 
-                  if track.state == 'lost']
-    if lost_times:
-        axes[1, 1].hist(lost_times, bins=15, edgecolor='black')
-        axes[1, 1].set_title('Time Since Update (Lost Tracks)')
-        axes[1, 1].set_xlabel('Frames Since Update')
-        axes[1, 1].set_ylabel('Count')
-    else:
-        axes[1, 1].text(0.5, 0.5, 'No Lost Tracks', 
-                       ha='center', va='center', fontsize=14)
-        axes[1, 1].set_xticks([])
-        axes[1, 1].set_yticks([])
-    
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    else:
-        plt.show()
-
-
-def draw_detection(frame: np.ndarray, detection: Detection, 
-                  color: Tuple[int, int, int] = (0, 255, 0),
-                  thickness: int = 2) -> np.ndarray:
-    """
-    Draw single detection on frame
-    
-    Args:
-        frame: Input frame
-        detection: Detection to draw
-        color: Color for drawing
-        thickness: Line thickness
-        
-    Returns:
-        Frame with detection drawn
-    """
-    result = frame.copy()
-    x1, y1, x2, y2 = detection.tlbr.astype(int)
-    
-    # Draw bounding box
-    cv2.rectangle(result, (x1, y1), (x2, y2), color, thickness)
-    
-    # Draw score
-    label = f"{detection.score:.2f}"
-    label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-    
-    cv2.rectangle(result,
-                 (x1, y1 - label_size[1] - 8),
-                 (x1 + label_size[0], y1),
-                 color, -1)
-    
-    cv2.putText(result, label, (x1, y1 - 4),
-               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-    
-    return result
-
-
-def create_tracking_summary(tracks: Dict[int, Track],
-                           frame_width: int = 1920,
-                           frame_height: int = 1080) -> np.ndarray:
-    """
-    Create summary visualization of all tracks
-    
-    Args:
-        tracks: Dictionary of all tracks
-        frame_width: Width of output frame
-        frame_height: Height of output frame
-        
-    Returns:
-        Summary visualization frame
-    """
-    # Create blank canvas
-    canvas = np.ones((frame_height, frame_width, 3), dtype=np.uint8) * 255
-    
-    # Draw track trajectories
-    for track in tracks.values():
-        if len(track.detections) < 2:
-            continue
-            
-        # Get trajectory points
-        points = np.array([det.center for det in track.detections])
-        
-        # Scale to fit canvas
-        points[:, 0] = points[:, 0] / points[:, 0].max() * (frame_width - 100) + 50
-        points[:, 1] = points[:, 1] / points[:, 1].max() * (frame_height - 100) + 50
-        
-        # Choose color based on track state
-        color = TRACK_COLORS.get(track.state, (0, 0, 0))
-        
-        # Draw trajectory
-        for i in range(1, len(points)):
-            cv2.line(canvas, 
-                    tuple(points[i-1].astype(int)),
-                    tuple(points[i].astype(int)),
-                    color, 2)
-        
-        # Draw track ID at end
-        cv2.putText(canvas, f"ID: {track.track_id}", 
-                   tuple(points[-1].astype(int)),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-    
-    # Add legend
-    y_offset = 30
-    for state, color in TRACK_COLORS.items():
-        cv2.rectangle(canvas, (20, y_offset), (40, y_offset + 20), color, -1)
-        cv2.putText(canvas, state, (50, y_offset + 15),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
-        y_offset += 30
-    
-    return canvas

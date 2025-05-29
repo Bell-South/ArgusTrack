@@ -3,7 +3,7 @@
 from pathlib import Path
 from argus_track import (
     TrackerConfig,
-    LightPostTracker,
+    EnhancedLightPostTracker,
     YOLODetector
 )
 from argus_track.utils import load_gps_data
@@ -58,7 +58,7 @@ def main():
         print("No GPS data found, proceeding without geolocation")
     
     # Create tracker
-    tracker = LightPostTracker(config, detector)
+    tracker = EnhancedLightPostTracker(config, detector)
     
     # Process video
     print(f"Processing video: {video_path}")

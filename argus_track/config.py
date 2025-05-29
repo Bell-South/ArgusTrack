@@ -1,6 +1,5 @@
-# argus_track/config.py (UPDATE - Add stereo configuration)
-
-"""Configuration classes for ByteTrack Light Post Tracking System"""
+# argus_track/config.py (UPDATED TRACKING PARAMETERS)
+"""Configuration with improved tracking parameters for static objects"""
 
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
@@ -13,19 +12,60 @@ from pathlib import Path
 
 @dataclass
 class TrackerConfig:
-    """Configuration for ByteTrack light post tracker"""
-    track_thresh: float = 0.5          # Minimum detection confidence
-    match_thresh: float = 0.8          # Minimum IoU for matching
-    track_buffer: int = 50             # Frames to keep lost tracks
-    min_box_area: float = 100.0        # Minimum detection area
-    static_threshold: float = 2.0      # Pixel movement threshold for static detection
-    min_static_frames: int = 5         # Frames needed to confirm static object
+    """Configuration for ByteTrack light post tracker - OPTIMIZED FOR STATIC OBJECTS"""
     
-    # Stereo-specific parameters
-    stereo_mode: bool = True           # Enable stereo processing
-    stereo_match_threshold: float = 0.7  # IoU threshold for stereo matching
-    max_stereo_distance: float = 100.0   # Max pixel distance for stereo matching
-    gps_frame_interval: int = 6          # Process every Nth frame (60fps -> 10fps GPS)
+    # DETECTION THRESHOLDS - More restrictive to reduce noise
+    track_thresh: float = 0.3          # Higher threshold to avoid weak detections
+    match_thresh: float = 0.3          # Lower IoU threshold for better matching of static objects
+    
+    # TRACK MANAGEMENT - Extended for static objects
+    track_buffer: int = 100            # Keep lost tracks longer (static objects may be occluded)
+    min_box_area: float = 200.0        # Larger minimum area to filter small noise
+    
+    # STATIC OBJECT DETECTION - More conservative
+    static_threshold: float = 5.0      # Pixels - allow slightly more movement for static detection
+    min_static_frames: int = 15        # Require more frames to confirm static object
+    max_track_age: int = 1000          # Maximum age before removing track
+    
+    # TRACK CONFIRMATION - More strict requirements
+    min_hits: int = 5                  # Require more hits before confirming track
+    max_time_lost: int = 50            # Maximum frames without detection before marking as lost
+    
+    # DUPLICATE TRACK MERGING - New parameters
+    merge_distance_threshold: float = 30.0    # Pixel distance to consider tracks duplicates
+    merge_iou_threshold: float = 0.5          # IoU threshold for merging tracks
+    enable_track_merging: bool = True         # Enable automatic duplicate track merging
+    
+    # GPS AND GEOLOCATION
+    gps_frame_interval: int = 6        # Process every 6th frame for GPS (10fps from 60fps)
+    min_gps_points: int = 5            # Minimum GPS points needed for geolocation
+    max_geolocation_std: float = 0.0001  # Maximum standard deviation for reliable geolocation
+    
+    # STEREO PARAMETERS
+    stereo_mode: bool = False          # Default to monocular
+    stereo_match_threshold: float = 0.7
+    max_stereo_distance: float = 100.0
+    
+    @classmethod
+    def create_optimized_config(cls) -> 'TrackerConfig':
+        """Create optimized configuration for static LED detection"""
+        return cls(
+            track_thresh=0.1,              # Higher confidence threshold
+            match_thresh=0.6,              # More lenient matching for static objects
+            track_buffer=150,              # Longer buffer for static objects
+            min_box_area=300.0,            # Filter out small detections
+            static_threshold=8.0,          # Allow some camera shake
+            min_static_frames=20,          # More frames needed for static confirmation
+            max_track_age=2000,            # Very long track lifetime
+            min_hits=8,                    # More hits required for confirmation
+            max_time_lost=75,              # Longer time before considering lost
+            merge_distance_threshold=50.0, # Merge nearby duplicate tracks
+            merge_iou_threshold=0.4,       # IoU threshold for merging
+            enable_track_merging=True,     # Enable merging
+            gps_frame_interval=6,          # GPS sync
+            min_gps_points=8,              # More GPS points for better accuracy
+            max_geolocation_std=0.00005    # Stricter geolocation reliability
+        )
     
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'TrackerConfig':
@@ -51,7 +91,6 @@ class TrackerConfig:
         with open(output_path, 'w') as f:
             json.dump(self.__dict__, f, indent=2)
 
-
 @dataclass
 class DetectorConfig:
     """Configuration for object detectors"""
@@ -62,7 +101,6 @@ class DetectorConfig:
     nms_threshold: float = 0.4
     model_type: str = "yolov11"        # Support for YOLOv11
     
-
 @dataclass
 class StereoCalibrationConfig:
     """Stereo camera calibration parameters"""
@@ -130,7 +168,6 @@ class StereoCalibrationConfig:
         
         with open(output_path, 'wb') as f:
             pickle.dump(calib_data, f)
-
 
 @dataclass
 class CameraConfig:

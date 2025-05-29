@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 from argus_track import (
     TrackerConfig,
-    LightPostTracker,
+    EnhancedLightPostTracker,
     ByteTrack,
     MockDetector
 )
@@ -150,7 +150,7 @@ class TestStaticObjectAnalysis:
         )
         
         detector = MockDetector()
-        tracker = LightPostTracker(config, detector)
+        tracker = EnhancedLightPostTracker(config, detector)
         
         # Create track with minimal movement
         track = Track(track_id=0)

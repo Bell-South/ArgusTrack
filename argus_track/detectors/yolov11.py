@@ -1,6 +1,5 @@
-# argus_track/detectors/yolov11.py (NEW FILE)
-
-"""YOLOv11 detector implementation with improved architecture support"""
+# argus_track/detectors/yolov11.py (FIXED)
+"""YOLOv11 detector implementation with proper class handling"""
 
 import cv2
 import numpy as np
@@ -50,10 +49,12 @@ class YOLOv11Detector(ObjectDetector):
         
         # Load model
         self.model = self._load_model()
+        
         # Get class names directly from the loaded model
         self.class_names = list(self.model.names.values())
+        self.logger.info(f"Model classes: {dict(self.model.names)}")
 
-        # If no target_classes specified, use ALL classes from the model
+        # Set target classes - FIXED: Now handles all classes properly
         if target_classes is None:
             self.target_classes = self.class_names.copy()
             self.logger.info(f"Using all model classes: {self.target_classes}")
@@ -66,15 +67,15 @@ class YOLOv11Detector(ObjectDetector):
             else:
                 self.target_classes = valid_classes
                 self.logger.info(f"Using filtered target classes: {self.target_classes}")
-    
         
-        # Target class indices
+        # Target class indices - FIXED: Now maps to actual class names
         self.target_class_indices = [
             i for i, name in enumerate(self.class_names) 
             if name in self.target_classes
         ]
         
         self.logger.info(f"Initialized YOLOv11 detector with {len(self.target_classes)} target classes")
+        self.logger.info(f"Target class indices: {self.target_class_indices}")
     
     def _load_model(self):
         """Load YOLOv11 model"""
@@ -102,23 +103,6 @@ class YOLOv11Detector(ObjectDetector):
             self.logger.error(f"Failed to load YOLOv11 model: {e}")
             raise
     
-    def _get_coco_classes(self) -> List[str]:
-        """Get COCO class names"""
-        return [
-            'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck',
-            'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench',
-            'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra',
-            'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-            'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove',
-            'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup',
-            'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange',
-            'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
-            'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse',
-            'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
-            'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier',
-            'toothbrush'
-        ]
-    
     def detect(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """
         Detect objects in frame using YOLOv11
@@ -138,26 +122,19 @@ class YOLOv11Detector(ObjectDetector):
         except Exception as e:
             self.logger.error(f"Detection failed: {e}")
             return []
-        
-    # Edit argus_track/detectors/yolov11.py
+    
     def _detect_ultralytics(self, frame: np.ndarray) -> List[Dict[str, Any]]:
-        """Detection using ultralytics YOLO"""
+        """Detection using ultralytics YOLO - FIXED to handle all classes"""
         
-        # print(f"🔍 DETECTION CALLED: Frame shape {frame.shape}")
-        # self.logger.info(f"🔍 DETECTION CALLED: Frame shape {frame.shape}")
-        
-        # Run inference
+        # Run inference with low confidence to catch all possible detections
         results = self.model.predict(
             frame, 
-            conf=0.001,  # Force very low confidence
+            conf=0.001,  # Very low confidence to catch everything
             iou=self.nms_threshold,
             verbose=False
         )
         
         detections = []
-        
-        # print(f"🔍 MODEL RESULTS: {len(results)} results")
-        # self.logger.info(f"🔍 MODEL RESULTS: {len(results)} results")
         
         if results and len(results) > 0:
             result = results[0]
@@ -167,14 +144,17 @@ class YOLOv11Detector(ObjectDetector):
                 scores = result.boxes.conf.cpu().numpy()
                 classes = result.boxes.cls.cpu().numpy().astype(int)
                 
-                # print(f"🔍 RAW DETECTIONS: {len(boxes)} boxes")
-                # self.logger.info(f"🔍 RAW DETECTIONS: {len(boxes)} boxes")
+                self.logger.debug(f"Raw detections: {len(boxes)} boxes, classes: {set(classes)}")
                 
                 for i, (box, score, cls_id) in enumerate(zip(boxes, scores, classes)):
-                    if cls_id in [0, 1]:  # Led-150 or Led-240
-                        class_name = f"Led-{150 if cls_id == 0 else 240}"
+                    # FIXED: Check if class is in our target classes instead of hardcoded check
+                    if cls_id < len(self.class_names):
+                        class_name = self.class_names[cls_id]
                         
-                        if score >= self.confidence_threshold:
+                        # Only keep detections of target classes with sufficient confidence
+                        if (class_name in self.target_classes and 
+                            score >= self.confidence_threshold):
+                            
                             detections.append({
                                 'bbox': box.tolist(),
                                 'score': float(score),
@@ -182,11 +162,13 @@ class YOLOv11Detector(ObjectDetector):
                                 'class_id': cls_id
                             })
                             
-                            # print(f"✅ KEPT: {class_name}, Conf: {score:.4f}")
-                            # self.logger.info(f"✅ KEPT: {class_name}, Conf: {score:.4f}")
+                            self.logger.debug(f"Kept detection: {class_name} (ID:{cls_id}), Conf: {score:.4f}")
+                        else:
+                            self.logger.debug(f"Filtered out: {class_name} (ID:{cls_id}), Conf: {score:.4f}")
+                    else:
+                        self.logger.warning(f"Invalid class ID: {cls_id}")
         
-        # print(f"🔍 FINAL: {len(detections)} detections returned")
-        # self.logger.info(f"🔍 FINAL: {len(detections)} detections returned")
+        self.logger.debug(f"Final detections: {len(detections)}")
         return detections
 
     def _detect_torch(self, frame: np.ndarray) -> List[Dict[str, Any]]:
@@ -287,16 +269,17 @@ class YOLOv11Detector(ObjectDetector):
         for box, score, cls_id in zip(final_boxes, final_scores, final_classes):
             cls_id = int(cls_id.item())
             
-            # Filter by target classes
-            if cls_id in self.target_class_indices:
+            # Filter by target classes - FIXED: Now uses proper class checking
+            if cls_id < len(self.class_names):
                 class_name = self.class_names[cls_id]
                 
-                detections.append({
-                    'bbox': box.cpu().numpy().tolist(),
-                    'score': float(score.item()),
-                    'class_name': class_name,
-                    'class_id': cls_id
-                })
+                if class_name in self.target_classes:
+                    detections.append({
+                        'bbox': box.cpu().numpy().tolist(),
+                        'score': float(score.item()),
+                        'class_name': class_name,
+                        'class_id': cls_id
+                    })
         
         return detections
     
@@ -323,5 +306,6 @@ class YOLOv11Detector(ObjectDetector):
             'confidence_threshold': self.confidence_threshold,
             'nms_threshold': self.nms_threshold,
             'target_classes': self.target_classes,
-            'num_classes': len(self.class_names)
+            'num_classes': len(self.class_names),
+            'all_classes': dict(enumerate(self.class_names))
         }

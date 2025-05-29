@@ -2,7 +2,7 @@
 
 from argus_track import (
     TrackerConfig,
-    LightPostTracker,
+    EnhancedLightPostTracker,
     MockDetector
 )
 
@@ -22,7 +22,7 @@ def main():
     detector = MockDetector(target_classes=['light_post', 'street_light'])
     
     # Create tracker
-    tracker = LightPostTracker(config, detector)
+    tracker = EnhancedLightPostTracker(config, detector)
     
     # Process video
     tracks = tracker.process_video(

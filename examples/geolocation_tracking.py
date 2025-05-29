@@ -11,7 +11,7 @@ from pathlib import Path
 
 from argus_track import (
     TrackerConfig,
-    LightPostTracker,
+    EnhancedLightPostTracker,
     MockDetector,
     YOLODetector
 )
@@ -82,7 +82,7 @@ def main():
         return 1
     
     # Initialize tracker
-    tracker = LightPostTracker(config, detector)
+    tracker = EnhancedLightPostTracker(config, detector)
     
     # Process video
     logging.info(f"Processing video: {args.video_path}")

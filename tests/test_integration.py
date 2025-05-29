@@ -15,7 +15,7 @@ from argus_track import (
     Track,
     GPSData,
     ByteTrack, 
-    LightPostTracker, 
+    EnhancedLightPostTracker, 
     MockDetector
 )
 from argus_track.utils.gps_utils import GeoLocation
@@ -114,14 +114,14 @@ class TestBasicTracking:
         assert any(t.hits == 1 for t in tracks)  # One new track
 
 
-class TestLightPostTrackerWithGPS:
-    """Test LightPostTracker with GPS integration"""
+class TestEnhancedLightPostTrackerWithGPS:
+    """Test EnhancedEnhancedLightPostTracker with GPS integration"""
     
     def test_gps_integration(self):
         """Test GPS data integration with tracks"""
         config = TrackerConfig()
         detector = MockDetector(target_classes=['light_post'])
-        tracker = LightPostTracker(config, detector)
+        tracker = EnhancedLightPostTracker(config, detector)
         
         # Create sample frame
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -151,7 +151,7 @@ class TestLightPostTrackerWithGPS:
         """Test location estimation from GPS data"""
         config = TrackerConfig()
         detector = MockDetector(target_classes=['light_post'])
-        tracker = LightPostTracker(config, detector)
+        tracker = EnhancedLightPostTracker(config, detector)
         
         # Create sample frame
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -191,7 +191,7 @@ class TestLightPostTrackerWithGPS:
         """Test exporting locations to GeoJSON"""
         config = TrackerConfig()
         detector = MockDetector(target_classes=['light_post'])
-        tracker = LightPostTracker(config, detector)
+        tracker = EnhancedLightPostTracker(config, detector)
         
         # Create some fake track locations
         tracker.track_locations = {
@@ -299,7 +299,7 @@ class TestErrorHandling:
         """Test handling of invalid video path"""
         config = TrackerConfig()
         detector = MockDetector()
-        tracker = LightPostTracker(config, detector)
+        tracker = EnhancedLightPostTracker(config, detector)
         
         with pytest.raises(IOError):
             tracker.process_video("nonexistent_video.mp4")
@@ -308,7 +308,7 @@ class TestErrorHandling:
         """Test handling of gaps in GPS data"""
         config = TrackerConfig()
         detector = MockDetector()
-        tracker = LightPostTracker(config, detector)
+        tracker = EnhancedLightPostTracker(config, detector)
         
         # Create frame
         frame = np.zeros((480, 640, 3), dtype=np.uint8)

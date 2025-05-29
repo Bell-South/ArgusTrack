@@ -17,7 +17,7 @@ from pathlib import Path
 from argus_track import (
     TrackerConfig,
     StereoCalibrationConfig,
-    StereoLightPostTracker,
+    EnhancedStereoLightPostTracker,
     YOLOv11Detector
 )
 from argus_track.utils.io import load_gps_data
@@ -136,7 +136,7 @@ def main():
     
     # Initialize stereo tracker
     try:
-        tracker = StereoLightPostTracker(
+        tracker = EnhancedStereoLightPostTracker(
             config=config,
             detector=detector,
             stereo_calibration=stereo_calibration

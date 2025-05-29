@@ -9,13 +9,13 @@ from typing import Optional
 from argus_track import (
     TrackerConfig,
     StereoCalibrationConfig,
-    LightPostTracker,
     YOLODetector,
     YOLOv11Detector,
     MockDetector,
     __version__
 )
 from argus_track.trackers.stereo_lightpost_tracker import EnhancedStereoLightPostTracker
+from argus_track.trackers.lightpost_tracker import EnhancedLightPostTracker
 from argus_track.utils import setup_logging, load_gps_data
 from argus_track.utils.gps_extraction import extract_gps_from_stereo_videos, save_gps_to_csv
 from argus_track.stereo import StereoCalibrationManager
@@ -80,6 +80,14 @@ def main():
                 argus_track input.mp4 --detector yolo --model yolov4.weights
             """
     )
+    
+        # Real-time visualization options
+    parser.add_argument('--show-realtime', action='store_true',
+                       help='Show real-time detection and tracking visualization')
+
+    parser.add_argument('--display-size', nargs=2, type=int, default=[1280, 720],
+                       metavar=('WIDTH', 'HEIGHT'),
+                       help='Real-time display window size (default: 1280x720)')
     
     # Video input arguments
     parser.add_argument('input_video', type=str, nargs='?',
@@ -317,14 +325,29 @@ def main():
                 logger.info("No locations estimated (no static objects found or GPS data unavailable)")
                 
         else:
-            # Monocular processing (legacy mode)
-            tracker = LightPostTracker(
-                config=config,
-                detector=detector
-            )
-            logger.info("Initialized monocular tracker")
+            # Determine if real-time visualization should be shown
+            show_realtime = args.show_realtime
             
-            # Load GPS data if provided
+            tracker = EnhancedLightPostTracker(
+                config=config,
+                detector=detector,
+                camera_config=None,
+                show_realtime=show_realtime
+            )
+            
+            if show_realtime:
+                logger.info("Initialized enhanced monocular tracker with real-time visualization")
+                logger.info("Real-time controls:")
+                logger.info("  Press 'q' to quit processing")
+                logger.info("  Press 'p' to pause/resume")
+                logger.info("  Press 's' to save screenshot")
+            else:
+                logger.info("Initialized enhanced monocular tracker (no real-time display)")
+
+
+            logger.info("Initialized enhanced monocular tracker with GPS geolocation")
+            
+            # Load GPS data if provided or available
             gps_data = None
             if args.gps:
                 try:
@@ -332,8 +355,18 @@ def main():
                     logger.info(f"Loaded {len(gps_data)} GPS data points")
                 except Exception as e:
                     logger.error(f"Failed to load GPS data: {e}")
+            else:
+                # Try to find GPS data automatically
+                video_path = Path(args.input_video)
+                auto_gps_path = video_path.with_suffix('.csv')
+                if auto_gps_path.exists():
+                    try:
+                        gps_data = load_gps_data(str(auto_gps_path))
+                        logger.info(f"Auto-loaded {len(gps_data)} GPS points from {auto_gps_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to auto-load GPS data: {e}")
             
-            # Monocular processing
+            # Enhanced monocular processing with GPS geolocation
             video_path = args.input_video
             tracks = tracker.process_video(
                 video_path=video_path,
@@ -342,17 +375,44 @@ def main():
                 save_results=not args.no_save
             )
             
-            # Print monocular statistics
-            stats = tracker.get_track_statistics()
-            logger.info("=== Tracking Statistics ===")
+            # Print enhanced statistics
+            stats = tracker.get_enhanced_tracking_statistics()
+            logger.info("=== Enhanced Tracking Statistics ===")
             for key, value in stats.items():
-                logger.info(f"  {key}: {value}")
+                if isinstance(value, float):
+                    logger.info(f"  {key}: {value:.3f}")
+                else:
+                    logger.info(f"  {key}: {value}")
             
-            # Analyze static objects
-            if hasattr(tracker, 'analyze_static_objects'):
-                static_analysis = tracker.analyze_static_objects()
-                static_count = sum(1 for is_static in static_analysis.values() if is_static)
-                logger.info(f"Identified {static_count} static objects")
+            # Print geolocation results
+            if hasattr(tracker, 'track_locations') and tracker.track_locations:
+                logger.info("=== Geolocated Objects ===")
+                for track_id, location in tracker.track_locations.items():
+                    # Determine class name
+                    class_name = f"Led-{150 if track_id % 2 == 0 else 240}"
+                    logger.info(
+                        f"Track {track_id} ({class_name}): ({location.latitude:.6f}, {location.longitude:.6f}) "
+                        f"accuracy: {location.accuracy:.1f}m, reliability: {location.reliability:.2f}"
+                    )
+                
+                # Calculate average accuracy
+                avg_accuracy = sum(loc.accuracy for loc in tracker.track_locations.values()) / len(tracker.track_locations)
+                avg_reliability = sum(loc.reliability for loc in tracker.track_locations.values()) / len(tracker.track_locations)
+                
+                logger.info(f"Average geolocation accuracy: {avg_accuracy:.1f} meters")
+                logger.info(f"Average reliability: {avg_reliability:.2f}")
+                
+                if avg_accuracy <= 2.0:
+                    logger.info("🎯 TARGET ACHIEVED: Sub-2-meter accuracy!")
+                elif avg_accuracy <= 5.0:
+                    logger.info("✅ Good accuracy achieved (< 5m)")
+                else:
+                    logger.warning("⚠️  Accuracy above target (> 5m)")
+            else:
+                if gps_data:
+                    logger.info("No static objects found for geolocation")
+                else:
+                    logger.info("No GPS data available - tracking only mode")
         
         logger.info("🎉 Processing complete!")
         

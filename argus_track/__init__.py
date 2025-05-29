@@ -25,7 +25,7 @@ from argus_track.__version__ import __version__
 from argus_track.config import TrackerConfig, StereoCalibrationConfig, DetectorConfig
 from argus_track.core import Detection, Track, GPSData
 from argus_track.core.stereo import StereoDetection, StereoFrame, StereoTrack
-from argus_track.trackers import ByteTrack, LightPostTracker
+from argus_track.trackers import ByteTrack, EnhancedLightPostTracker
 from argus_track.trackers.stereo_lightpost_tracker import EnhancedStereoLightPostTracker
 from argus_track.detectors.mock import MockDetector
 from argus_track.detectors import YOLODetector, ObjectDetector
@@ -53,7 +53,7 @@ __all__ = [
     "StereoFrame", 
     "StereoTrack",
     "ByteTrack",
-    "LightPostTracker",
+    "EnhancedLightPostTracker",
     "EnhancedStereoLightPostTracker",
     "YOLODetector",
     "YOLOv11Detector",
