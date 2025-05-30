@@ -1,10 +1,14 @@
-
-"""Main entry point for Argus Track Stereo Tracking System with GPS Extraction"""
+"""Main entry point for Argus Track with extreme performance optimizations"""
 
 import argparse
 import logging
 from pathlib import Path
 from typing import Optional
+import os
+import sys
+import time
+import numpy as np
+import cv2
 
 from argus_track import (
     TrackerConfig,
@@ -20,21 +24,41 @@ from argus_track.utils import setup_logging, load_gps_data
 from argus_track.utils.gps_extraction import extract_gps_from_stereo_videos, save_gps_to_csv
 from argus_track.stereo import StereoCalibrationManager
 
+# Import the extreme performance optimizations if available
+try:
+    from argus_track.utils.extreme_performance import (
+        PerformanceOptimizer, 
+        optimize_numpy,
+        optimize_video_capture,
+        optimize_detector
+    )
+    EXTREME_PERFORMANCE_AVAILABLE = True
+except ImportError:
+    EXTREME_PERFORMANCE_AVAILABLE = False
+
+
 def create_detector(detector_type: str, 
                     model_path: Optional[str] = None,
                     target_classes: Optional[list] = None,
                     confidence_threshold: float = 0.5,
-                    device: str = 'auto'):
-    """Create detector based on type"""
+                    device: str = 'auto',
+                    optimizer=None):
+    """Create detector based on type with optimizations"""
     
     if detector_type == 'yolov11' and model_path:
         try:
-            return YOLOv11Detector(
+            detector = YOLOv11Detector(
                 model_path=model_path,
                 target_classes=target_classes,
                 confidence_threshold=confidence_threshold,
                 device=device
             )
+            
+            # Apply performance optimizations if available
+            if optimizer:
+                optimizer.optimize_yolo_inference(detector.model)
+            
+            return detector
         except Exception as e:
             logging.warning(f"Failed to load YOLOv11: {e}, falling back to mock detector")
             return MockDetector(target_classes=target_classes)
@@ -48,11 +72,17 @@ def create_detector(detector_type: str,
             if not weights_path.exists():
                 weights_path = Path(model_path)
             
-            return YOLODetector(
+            detector = YOLODetector(
                 model_path=str(weights_path),
                 config_path=str(config_path),
                 target_classes=target_classes
             )
+            
+            # Apply detector optimizations
+            if optimizer:
+                optimize_detector(detector)
+            
+            return detector
         except Exception as e:
             logging.warning(f"Failed to load YOLO: {e}, falling back to mock detector")
             return MockDetector(target_classes=target_classes)
@@ -60,8 +90,13 @@ def create_detector(detector_type: str,
     else:
         return MockDetector(target_classes=target_classes)
 
+
 def main():
     """Main function for enhanced stereo light post tracking with GPS extraction"""
+    # Apply numpy optimizations first
+    if EXTREME_PERFORMANCE_AVAILABLE:
+        optimize_numpy()
+    
     parser = argparse.ArgumentParser(
         description=f"Argus Track: Enhanced Stereo Light Post Tracking System v{__version__}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -78,16 +113,11 @@ def main():
                 
                 # Monocular tracking (legacy mode)
                 argus_track input.mp4 --detector yolo --model yolov4.weights
+                
+                # Extreme performance mode
+                argus_track input.mp4 --detector yolo --model yolov4.weights --skip-frames 9 --resolution-scale 0.5
             """
     )
-    
-        # Real-time visualization options
-    parser.add_argument('--show-realtime', action='store_true',
-                       help='Show real-time detection and tracking visualization')
-
-    parser.add_argument('--display-size', nargs=2, type=int, default=[1280, 720],
-                       metavar=('WIDTH', 'HEIGHT'),
-                       help='Real-time display window size (default: 1280x720)')
     
     # Video input arguments
     parser.add_argument('input_video', type=str, nargs='?',
@@ -126,6 +156,8 @@ def main():
                        help='Path for output video or GPS CSV file')
     parser.add_argument('--config', type=str,
                        help='Path to configuration file')
+    parser.add_argument('--no-save-video', action='store_true',
+                       help='Do not save output video (still save tracking data)')
     
     # Logging options
     parser.add_argument('--log-file', type=str,
@@ -149,6 +181,27 @@ def main():
     parser.add_argument('--stereo-thresh', type=float, default=0.7,
                        help='Stereo matching threshold')
     
+    # Performance options
+    parser.add_argument('--skip-frames', type=int, default=0,
+                       help='Skip N frames between processing (0 = process all frames)')
+    parser.add_argument('--resolution-scale', type=float, default=1.0,
+                       help='Scale factor for input resolution (0.5 = half size)')
+    
+    # Real-time visualization options
+    parser.add_argument('--show-realtime', action='store_true',
+                       help='Show real-time detection and tracking visualization')
+    parser.add_argument('--display-size', nargs=2, type=int, default=[1280, 720],
+                       metavar=('WIDTH', 'HEIGHT'),
+                       help='Real-time display window size (default: 1280x720)')
+    
+    # Extreme performance options
+    parser.add_argument('--hardware-acceleration', action='store_true',
+                       help='Use hardware acceleration if available (CUDA/OpenCL)')
+    parser.add_argument('--memory-limit', type=int, default=0,
+                       help='Memory usage limit in MB (0 = no limit)')
+    parser.add_argument('--profile', action='store_true',
+                       help='Enable performance profiling')
+    
     args = parser.parse_args()
     
     # Validate input arguments
@@ -164,6 +217,23 @@ def main():
     logger = logging.getLogger(__name__)
     
     logger.info(f"Argus Track: Enhanced Stereo Light Post Tracking System v{__version__}")
+    
+    # Initialize performance optimizer if available
+    optimizer = None
+    if EXTREME_PERFORMANCE_AVAILABLE:
+        optimizer = PerformanceOptimizer()
+        hw_settings = optimizer.optimize_hardware_settings()
+        logger.info(f"Applied hardware optimizations: {hw_settings}")
+    else:
+        logger.info("Extreme performance optimizations not available")
+    
+    # Performance warning for real-time visualization
+    if args.show_realtime:
+        logger.warning("Real-time visualization is enabled, which may significantly slow down processing")
+    
+    # Warning about resolution scaling
+    if args.resolution_scale < 1.0:
+        logger.warning(f"Resolution scaling is set to {args.resolution_scale:.2f}x, which may reduce detection accuracy")
     
     # Determine processing mode
     stereo_mode = args.stereo is not None
@@ -240,15 +310,18 @@ def main():
         )
     
     # Initialize detector
+    start_time = time.time()
     try:
         detector = create_detector(
             detector_type=args.detector,
             model_path=args.model,
             target_classes=args.target_classes,
-            confidence_threshold=args.track_thresh,  # 👈 from CLI
-            device='auto'  # or expose this as --device if needed
+            confidence_threshold=args.track_thresh,
+            device='cuda' if args.hardware_acceleration else 'auto',
+            optimizer=optimizer
         )
-        logger.info(f"Initialized {args.detector} detector")
+        detector_init_time = time.time() - start_time
+        logger.info(f"Initialized {args.detector} detector in {detector_init_time:.2f}s")
     except Exception as e:
         logger.error(f"Failed to initialize detector: {e}")
         return 1
@@ -256,6 +329,10 @@ def main():
     # Process videos
     try:
         if stereo_mode:
+            # We don't currently implement real-time visualization for stereo mode
+            # but we'll warn the user if they've requested it
+            if args.show_realtime:
+                logger.warning("Real-time visualization not supported in stereo mode, ignoring --show-realtime")
             
             # Initialize enhanced stereo tracker
             tracker = EnhancedStereoLightPostTracker(
@@ -272,7 +349,7 @@ def main():
                 tracks = tracker.process_stereo_video_with_auto_gps(
                     left_video_path=left_video,
                     right_video_path=right_video,
-                    output_path=args.output,
+                    output_path=args.output if not args.no_save_video else None,
                     save_results=not args.no_save,
                     gps_extraction_method=args.gps_method,
                     save_extracted_gps=args.save_gps_csv or True
@@ -292,7 +369,7 @@ def main():
                     left_video_path=left_video,
                     right_video_path=right_video,
                     gps_data=gps_data,
-                    output_path=args.output,
+                    output_path=args.output if not args.no_save_video else None,
                     save_results=not args.no_save
                 )
             
@@ -325,14 +402,23 @@ def main():
                 logger.info("No locations estimated (no static objects found or GPS data unavailable)")
                 
         else:
-            # Determine if real-time visualization should be shown
+            # Real-time visualization is controlled by the command-line flag
             show_realtime = args.show_realtime
             
+            # Create display size tuple for the visualizer
+            display_size = tuple(args.display_size) if args.display_size else (1280, 720)
+            
+            # Apply extreme performance optimizations
+            skip_frames = args.skip_frames
+            resolution_scale = args.resolution_scale
+
             tracker = EnhancedLightPostTracker(
                 config=config,
                 detector=detector,
                 camera_config=None,
-                show_realtime=show_realtime
+                show_realtime=show_realtime,
+                display_size=display_size,
+                skip_frames=skip_frames
             )
             
             if show_realtime:
@@ -343,9 +429,12 @@ def main():
                 logger.info("  Press 's' to save screenshot")
             else:
                 logger.info("Initialized enhanced monocular tracker (no real-time display)")
+                logger.info("Processing with maximum performance (no visualization)")
 
-
-            logger.info("Initialized enhanced monocular tracker with GPS geolocation")
+            # Apply extreme performance optimizations
+            if optimizer:
+                logger.info(f"Applied resolution scaling: {resolution_scale:.2f}x")
+                logger.info(f"Processing every {skip_frames + 1}th frame")
             
             # Load GPS data if provided or available
             gps_data = None
@@ -366,14 +455,78 @@ def main():
                     except Exception as e:
                         logger.warning(f"Failed to auto-load GPS data: {e}")
             
+            # Set memory limits if requested
+            if args.memory_limit > 0 and optimizer:
+                optimizer.memory_limit = args.memory_limit
+                logger.info(f"Set memory limit to {args.memory_limit}MB")
+            
+            # Start profiling if requested
+            if args.profile:
+                try:
+                    import cProfile
+                    profiler = cProfile.Profile()
+                    profiler.enable()
+                    logger.info("Performance profiling enabled")
+                except ImportError:
+                    logger.warning("cProfile not available, profiling disabled")
+                    profiler = None
+            else:
+                profiler = None
+            
             # Enhanced monocular processing with GPS geolocation
             video_path = args.input_video
+            process_start_time = time.time()
+            
+            # Process video with extreme performance optimizations
+            if optimizer and resolution_scale < 1.0:
+                # Open video to get dimensions for resolution scaling
+                import cv2
+                cap = cv2.VideoCapture(video_path)
+                if cap.isOpened():
+                    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    cap.release()
+                    
+                    # Set resolution scaling
+                    target_width = int(width * resolution_scale)
+                    target_height = int(height * resolution_scale)
+                    optimizer.set_resolution_scaling(width, height, target_width, target_height)
+                    
+                    logger.info(f"Scaled resolution from {width}x{height} to {target_width}x{target_height}")
+
             tracks = tracker.process_video(
                 video_path=video_path,
                 gps_data=gps_data,
-                output_path=args.output,
-                save_results=not args.no_save
+                output_path=args.output if not args.no_save_video else None,
+                save_results=not args.no_save,
+                resolution_scale=resolution_scale if optimizer else 1.0
             )
+            
+            processing_time = time.time() - process_start_time
+            logger.info(f"Video processing completed in {processing_time:.2f}s")
+            
+            # Stop profiling if enabled
+            if profiler:
+                profiler.disable()
+                
+                # Save profiling results
+                import pstats
+                from io import StringIO
+                
+                s = StringIO()
+                ps = pstats.Stats(profiler, stream=s).sort_stats('cumulative')
+                ps.print_stats(30)  # Top 30 functions by time
+                
+                profile_text = s.getvalue()
+                logger.info("Performance Profile:")
+                for line in profile_text.split('\n')[:40]:  # First 40 lines
+                    if line.strip():
+                        logger.info(line)
+                
+                # Save full profile to file
+                profile_path = Path(video_path).with_suffix('.prof')
+                ps.dump_stats(str(profile_path))
+                logger.info(f"Full performance profile saved to {profile_path}")
             
             # Print enhanced statistics
             stats = tracker.get_enhanced_tracking_statistics()
@@ -428,13 +581,17 @@ def main():
             (f"{video_stem}.json", "Tracking results"),
             (f"{video_stem}.geojson", "Location data for GIS"),
             (f"{video_stem}.csv", "GPS data"),
-            (args.output, "Visualization video") if args.output else None
+            (args.output, "Visualization video") if args.output and not args.no_save_video else None
         ]
         
         for output_info in possible_outputs:
             if output_info and Path(output_info[0]).exists():
                 file_size = Path(output_info[0]).stat().st_size / (1024 * 1024)
                 logger.info(f"  📄 {output_info[1]}: {output_info[0]} ({file_size:.1f} MB)")
+        
+        # Print final performance metrics if optimizer available
+        if optimizer:
+            optimizer.print_performance_report()
         
         return 0
         

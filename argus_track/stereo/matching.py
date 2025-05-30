@@ -23,7 +23,8 @@ class StereoMatcher:
                  max_disparity: float = 1000.0,
                  min_disparity: float = -50.0,
                  epipolar_threshold: float = 16.0,
-                 iou_threshold: float = 0.0):
+                 iou_threshold: float = 0.0,
+                 cost_threshold: float = 0.8):  # Added cost threshold parameter
         """
         Initialize stereo matcher
         
@@ -33,12 +34,14 @@ class StereoMatcher:
             min_disparity: Minimum disparity in pixels
             epipolar_threshold: Maximum distance from epipolar line in pixels
             iou_threshold: Minimum IoU for detection matching
+            cost_threshold: Maximum matching cost to accept (lower is better)
         """
         self.calibration = calibration
         self.max_disparity = max_disparity
         self.min_disparity = min_disparity
         self.epipolar_threshold = epipolar_threshold
         self.iou_threshold = iou_threshold
+        self.cost_threshold = cost_threshold  # Added this line
         self.logger = logging.getLogger(f"{__name__}.StereoMatcher")
         
         # Precompute rectification maps if available
@@ -116,17 +119,16 @@ class StereoMatcher:
         n_left = len(left_detections)
         n_right = len(right_detections)
         cost_matrix = np.ones((n_left, n_right))  # Initialize with high cost
+        
         for i, left_det in enumerate(left_detections):
             for j, right_det in enumerate(right_detections):
                 # Check epipolar constraint
                 if not self._check_epipolar_constraint(left_det, right_det):
-                    self.logger.info(f"Reject (epipolar): L{i} R{j} ({left_det}, {right_det})")
                     continue
                 
                 # Check disparity range
                 disparity = self._calculate_disparity(left_det, right_det)
                 if not (self.min_disparity <= disparity <= self.max_disparity):
-                    self.logger.info(f"Reject (disparity): L{i} R{j} (disp={disparity:.2f})")
                     continue
                 
                 # Calculate geometric cost
@@ -138,35 +140,6 @@ class StereoMatcher:
                 # Combine costs
                 total_cost = 0.7 * geometric_cost + 0.3 * appearance_cost
                 cost_matrix[i, j] = total_cost
-
-                if total_cost > self.cost_threshold:
-                    self.logger.info(f"Reject (cost): L{i} R{j} (cost={total_cost:.2f})")
-                    continue
-            
-                # If all checks pass, it's a candidate
-                self.logger.info(f"Candidate pair: L{i} R{j} (cost={total_cost:.2f}, disp={disparity:.2f})")
-
-        # for i, left_det in enumerate(left_detections):
-        #     for j, right_det in enumerate(right_detections):
-
-        #         # Check epipolar constraint
-        #         if not self._check_epipolar_constraint(left_det, right_det):
-        #             continue
-                
-        #         # Check disparity range
-        #         disparity = self._calculate_disparity(left_det, right_det)
-        #         if not (self.min_disparity <= disparity <= self.max_disparity):
-        #             continue
-                
-        #         # Calculate geometric cost
-        #         geometric_cost = self._calculate_geometric_cost(left_det, right_det)
-                
-        #         # Calculate appearance cost (simplified - could use features)
-        #         appearance_cost = self._calculate_appearance_cost(left_det, right_det)
-                
-        #         # Combine costs
-        #         total_cost = 0.7 * geometric_cost + 0.3 * appearance_cost
-        #         cost_matrix[i, j] = total_cost
         
         return cost_matrix
     

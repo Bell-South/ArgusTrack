@@ -5,7 +5,7 @@ import logging
 from typing import List, Dict, Tuple
 import numpy as np
 from scipy.optimize import linear_sum_assignment
-
+import gc
 from ..config import TrackerConfig
 from ..core import Detection, Track
 from ..filters import KalmanBoxTracker, batch_predict_kalman

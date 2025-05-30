@@ -1,5 +1,4 @@
-"""Light Post Tracker with Enhanced GPS integration and Real-time Display"""
-
+"""Light Post Tracker with FIXED GPS synchronization - Only process GPS frames"""
 import json
 import time
 import logging
@@ -15,34 +14,34 @@ from .bytetrack import ByteTrack
 from ..utils.visualization import draw_tracks, create_track_overlay, RealTimeVisualizer
 from ..utils.io import save_tracking_results, load_gps_data
 from ..utils.gps_utils import compute_average_location, filter_gps_outliers, GeoLocation, CoordinateTransformer
+from ..utils.gps_sync_tracker import GPSSynchronizer  # Import the fixed synchronizer
 
 
 class EnhancedLightPostTracker:
     """
-    Enhanced light post tracking system with GPS-based geolocation calculation and real-time display
+    FIXED: Enhanced light post tracking system with proper GPS synchronization
+    Only processes frames when GPS data is actually available
     """
     
     def __init__(self, config: TrackerConfig, 
-                 detector: ObjectDetector,
-                 camera_config: Optional[CameraConfig] = None,
-                 show_realtime: bool = True):
+                detector: ObjectDetector,
+                camera_config: Optional[CameraConfig] = None,
+                show_realtime: bool = False,
+                display_size: Tuple[int, int] = (1280, 720),
+                skip_frames: int = 0):
         """
-        Initialize enhanced light post tracker
-        
-        Args:
-            config: Tracker configuration
-            detector: Object detection module
-            camera_config: Camera calibration configuration
-            show_realtime: Whether to show real-time visualization
+        Initialize enhanced light post tracker - FIXED VERSION
         """
         self.config = config
         self.detector = detector
         self.tracker = ByteTrack(config)
         self.logger = logging.getLogger(f"{__name__}.EnhancedLightPostTracker")
         
-        # Real-time visualization
+        # Real-time visualization settings
         self.show_realtime = show_realtime
+        self.display_size = display_size
         self.visualizer = None
+        self.skip_frames = max(0, skip_frames)
         
         # Camera parameters for distance estimation
         self.camera_config = camera_config
@@ -51,35 +50,36 @@ class EnhancedLightPostTracker:
         self.image_height = 2028
         self.camera_height = 1.5  # Estimated camera height in meters
         
+        # Resolution scaling factor
+        self.resolution_scale = 1.0
+        
         # GPS tracking and geolocation
         self.gps_tracks: Dict[int, List[GPSData]] = {}
-        self.frame_to_gps: Dict[int, GPSData] = {}
+        self.gps_synchronizer: Optional[GPSSynchronizer] = None  # FIXED: GPS synchronizer
         self.track_locations: Dict[int, GeoLocation] = {}
         
         # Performance monitoring
         self.processing_times = []
+        self.detection_times = []
+        self.tracking_times = []
+        self.visualization_times = []
         
-        self.logger.info("Initialized enhanced light post tracker with GPS geolocation")
+        self.logger.info("Initialized FIXED enhanced light post tracker with GPS synchronization")
         if self.show_realtime:
-            self.logger.info("Real-time visualization enabled")
-        
+            self.logger.info(f"Real-time visualization enabled with display size {display_size}")
+        else:
+            self.logger.info("Real-time visualization disabled for maximum performance")
+
     def process_video(self, video_path: str, 
-                     gps_data: Optional[List[GPSData]] = None,
-                     output_path: Optional[str] = None,
-                     save_results: bool = True) -> Dict[int, List[Dict]]:
+                    gps_data: Optional[List[GPSData]] = None,
+                    output_path: Optional[str] = None,
+                    save_results: bool = True,
+                    resolution_scale: float = 1.0) -> Dict[int, List[Dict]]:
         """
-        Process complete video with tracking, GPS-based geolocation, and real-time display
-        
-        Args:
-            video_path: Path to input video
-            gps_data: GPS data synchronized with frames
-            output_path: Optional path for output video
-            save_results: Whether to save tracking results
-            
-        Returns:
-            Dictionary of tracks with their complete history
+        FIXED: Process complete video with GPS synchronization
+        Only processes frames where GPS data is available
         """
-        self.logger.info(f"Processing video with GPS geolocation: {video_path}")
+        self.logger.info(f"Processing video with FIXED GPS synchronization: {video_path}")
         
         # Open video
         cap = cv2.VideoCapture(video_path)
@@ -96,12 +96,33 @@ class EnhancedLightPostTracker:
         # Update camera parameters
         self.image_width = width
         self.image_height = height
+        self.resolution_scale = resolution_scale
         
-        # Initialize real-time visualizer
+        self.logger.info(f"Video properties: {frame_count} total frames, {fps} FPS, {width}x{height}")
+        
+        # FIXED: Initialize GPS synchronizer if GPS data available
+        if gps_data:
+            self.gps_synchronizer = GPSSynchronizer(gps_data, fps, gps_fps=10.0)
+            sync_stats = self.gps_synchronizer.get_processing_statistics()
+            
+            self.logger.info("🎯 GPS SYNCHRONIZATION ACTIVE:")
+            self.logger.info(f"   📍 GPS points available: {sync_stats['gps_points']}")
+            self.logger.info(f"   🎬 Frames to process: {sync_stats['sync_frames']}")
+            self.logger.info(f"   📊 Processing ratio: {sync_stats['processing_ratio']:.3f}")
+            self.logger.info(f"   🔄 GPS frequency: {sync_stats['avg_gps_frequency']:.1f} Hz")
+            
+            if sync_stats['sync_frames'] == 0:
+                self.logger.error("❌ No frames to process - GPS synchronization failed!")
+                return {}
+        else:
+            self.logger.warning("⚠️  No GPS data provided - processing all frames with skip pattern")
+            self.gps_synchronizer = None
+        
+        # Initialize real-time visualizer if requested
         if self.show_realtime:
             self.visualizer = RealTimeVisualizer(
-                window_name="Argus Track - LED Detection",
-                display_size=(1280, 720),
+                window_name="Argus Track - LED Detection (GPS Sync)",
+                display_size=self.display_size,
                 show_info_panel=True
             )
         
@@ -111,36 +132,56 @@ class EnhancedLightPostTracker:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
         
-        # Synchronize GPS data with frames
-        if gps_data:
-            self._synchronize_gps_with_frames(gps_data, frame_count, fps)
-            self.logger.info(f"Synchronized GPS data with {frame_count} video frames")
-        
-        # Process frames
+        # FIXED: Process frames based on GPS synchronization
         all_tracks = {}
-        frame_idx = 0
+        current_frame_idx = 0
+        processed_frames = 0
+        skipped_frames = 0
         user_quit = False
         
         try:
-            frame_idx = 0
             while True:
+                # Read frame
                 ret, frame = cap.read()
-                print(f"[DEBUG] Frame index {frame_idx}, ret: {ret}, frame is None: {frame is None}, shape: {getattr(frame, 'shape', None)}")
                 if not ret or frame is None:
-                    print("No frame, breaking.")
                     break
-                # if not ret:
-                #     break
-                    # Save first frame for manual check
-                if frame_idx == 0:
-                    cv2.imwrite("first_frame_debug.jpg", frame)
+                
+                # FIXED: Check if this frame should be processed
+                should_process = False
+                current_gps = None
+                
+                if self.gps_synchronizer:
+                    # Only process frames with GPS data
+                    should_process = self.gps_synchronizer.should_process_frame(current_frame_idx)
+                    if should_process:
+                        current_gps = self.gps_synchronizer.get_gps_for_frame(current_frame_idx)
+                else:
+                    # Fallback: use skip pattern if no GPS synchronizer
+                    should_process = (self.skip_frames == 0) or (current_frame_idx % (self.skip_frames + 1) == 0)
+                
+                if not should_process:
+                    current_frame_idx += 1
+                    skipped_frames += 1
+                    continue
+                
+                # Apply resolution scaling if enabled
+                if self.resolution_scale < 1.0:
+                    try:
+                        scaled_width = int(frame.shape[1] * self.resolution_scale)
+                        scaled_height = int(frame.shape[0] * self.resolution_scale)
+                        frame = cv2.resize(frame, (scaled_width, scaled_height), 
+                                        interpolation=cv2.INTER_AREA)
+                    except Exception as e:
+                        self.logger.error(f"Error scaling frame: {e}")
+                
+                # Process frame
                 start_time = time.time()
                 
-                # Get current GPS data
-                current_gps = self.frame_to_gps.get(frame_idx) if frame_idx in self.frame_to_gps else None
-                
-                # Detect objects
+                # Detect objects - with timing
+                detection_start = time.time()
                 raw_detections = self.detector.detect(frame)
+                detection_time = time.time() - detection_start
+                self.detection_times.append(detection_time)
                 
                 # Convert to Detection objects
                 detections = []
@@ -149,15 +190,18 @@ class EnhancedLightPostTracker:
                         bbox=np.array(det['bbox']),
                         score=det['score'],
                         class_id=det['class_id'],
-                        frame_id=frame_idx
+                        frame_id=current_frame_idx
                     ))
                 
-                # Update tracker
+                # Update tracker - with timing
+                tracking_start = time.time()
                 tracks = self.tracker.update(detections)
+                tracking_time = time.time() - tracking_start
+                self.tracking_times.append(tracking_time)
                 
                 # Update GPS data for active tracks (if GPS available)
                 if current_gps:
-                    self._update_gps_tracks(tracks, current_gps, frame_idx)
+                    self._update_gps_tracks(tracks, current_gps, current_frame_idx)
                 
                 # Store track data
                 for track in tracks:
@@ -166,18 +210,20 @@ class EnhancedLightPostTracker:
                     
                     # Enhanced track data with GPS frame info
                     track_data = {
-                        'frame': frame_idx,
+                        'frame': current_frame_idx,
                         'bbox': track.to_tlbr().tolist(),
                         'score': track.detections[-1].score if track.detections else 0,
                         'state': track.state,
                         'hits': track.hits,
                         'has_gps': current_gps is not None,
-                        'timestamp': current_gps.timestamp if current_gps else frame_idx / fps
+                        'timestamp': current_gps.timestamp if current_gps else current_frame_idx / fps
                     }
                     all_tracks[track.track_id].append(track_data)
                 
-                # Real-time visualization
+                # Real-time visualization (only if enabled)
                 if self.show_realtime and self.visualizer:
+                    viz_start_time = time.time()
+                    
                     gps_info = None
                     if current_gps:
                         gps_info = {
@@ -187,44 +233,65 @@ class EnhancedLightPostTracker:
                         }
                     
                     frame_info = {
-                        'frame_idx': frame_idx,
+                        'frame_idx': current_frame_idx,
                         'total_frames': frame_count,
-                        'fps': fps
+                        'fps': fps,
+                        'skipped_frames': skipped_frames,
+                        'processed_frames': processed_frames,
+                        'gps_sync': current_gps is not None
                     }
                     
                     # Show real-time visualization
-                    should_continue = self.visualizer.visualize_frame(
-                        frame, detections, tracks, gps_info, frame_info
-                    )
-                    frame_idx += 1
-                    if not should_continue:
-                        user_quit = True
-                        self.logger.info("User requested quit from visualization")
-                        break
+                    try:
+                        should_continue = self.visualizer.visualize_frame(
+                            frame, detections, tracks, gps_info, frame_info
+                        )
+                        
+                        if not should_continue:
+                            user_quit = True
+                            self.logger.info("User requested quit from visualization")
+                            break
+                    except Exception as viz_error:
+                        self.logger.error(f"Visualization error: {viz_error}")
+                    
+                    # Track visualization performance
+                    viz_time = time.time() - viz_start_time
+                    self.visualization_times.append(viz_time)
                 
                 # Save to output video if requested
                 if out_writer:
                     vis_frame = draw_tracks(frame, tracks)
-                    # Add GPS info overlay
                     if current_gps:
-                        self._add_gps_overlay(vis_frame, current_gps, frame_idx)
+                        self._add_gps_overlay(vis_frame, current_gps, current_frame_idx)
+                    
+                    # Scale back to original size if needed
+                    if self.resolution_scale < 1.0:
+                        vis_frame = cv2.resize(vis_frame, (width, height), interpolation=cv2.INTER_LINEAR)
+                    
                     out_writer.write(vis_frame)
                 
                 # Performance monitoring
                 process_time = time.time() - start_time
                 self.processing_times.append(process_time)
                 
-                # Progress logging (less frequent when showing real-time)
-                log_interval = 600 if self.show_realtime else 300  # Every 20s vs 10s
-                if frame_idx % log_interval == 0:
-                    avg_time = np.mean(self.processing_times[-100:]) if self.processing_times else 0
-                    progress = frame_idx / frame_count * 100
-                    self.logger.info(
-                        f"Processed {frame_idx}/{frame_count} frames "
-                        f"({progress:.1f}%) Avg time: {avg_time*1000:.1f}ms"
-                    )
+                processed_frames += 1
                 
-                frame_idx += 1
+                # Progress logging
+                if processed_frames % 50 == 0:  # Every 50 processed frames
+                    avg_time = np.mean(self.processing_times[-50:]) if self.processing_times else 0
+                    effective_fps = 1.0 / avg_time if avg_time > 0 else 0
+                    
+                    if self.gps_synchronizer:
+                        total_gps_frames = self.gps_synchronizer.get_sync_frames_count()
+                        progress = processed_frames / total_gps_frames * 100
+                        self.logger.info(f"📍 GPS-synced progress: {processed_frames}/{total_gps_frames} "
+                                       f"({progress:.1f}%) at {effective_fps:.1f} FPS")
+                    else:
+                        progress = current_frame_idx / frame_count * 100
+                        self.logger.info(f"🎬 Frame progress: {current_frame_idx}/{frame_count} "
+                                       f"({progress:.1f}%) - processed: {processed_frames}")
+                
+                current_frame_idx += 1
                 
         except KeyboardInterrupt:
             self.logger.info("Processing interrupted by user (Ctrl+C)")
@@ -243,71 +310,62 @@ class EnhancedLightPostTracker:
                 self.visualizer.close()
             cv2.destroyAllWindows()
         
-        if user_quit:
-            self.logger.info("Processing stopped by user request")
-        else:
-            self.logger.info(f"Processing completed successfully")
-        
-        # Calculate geolocations for tracked objects
-        if gps_data:
-            self.logger.info("Calculating object geolocations...")
+        # FIXED: Calculate geolocations for tracked objects
+        if self.gps_synchronizer and processed_frames > 0:
+            self.logger.info("📍 Calculating object geolocations from GPS-synced data...")
             self._calculate_object_geolocations(all_tracks)
+        
+        # Performance summary
+        if self.processing_times:
+            avg_processing = np.mean(self.processing_times) * 1000  # ms
+            effective_fps = 1.0 / np.mean(self.processing_times)
+            
+            self.logger.info("📊 PROCESSING SUMMARY:")
+            self.logger.info(f"   🎬 Total video frames: {frame_count}")
+            self.logger.info(f"   📍 Processed frames: {processed_frames}")
+            self.logger.info(f"   ⏭️  Skipped frames: {skipped_frames}")
+            self.logger.info(f"   ⚡ Processing FPS: {effective_fps:.1f}")
+            self.logger.info(f"   ⏱️  Avg frame time: {avg_processing:.1f}ms")
+            
+            if self.gps_synchronizer:
+                sync_stats = self.gps_synchronizer.get_processing_statistics()
+                self.logger.info(f"   🎯 GPS sync ratio: {sync_stats['processing_ratio']:.3f}")
+                self.logger.info(f"   📊 GPS frequency: {sync_stats['avg_gps_frequency']:.1f} Hz")
         
         # Save results if requested
         if save_results:
             results_path = Path(video_path).with_suffix('.json')
             geojson_path = Path(video_path).with_suffix('.geojson')
             
+            sync_stats = self.gps_synchronizer.get_processing_statistics() if self.gps_synchronizer else {}
+            
             self._save_enhanced_results(
                 all_tracks, results_path, geojson_path,
                 metadata={
-                    'total_frames': frame_idx,
+                    'total_frames': frame_count,
+                    'processed_frames': processed_frames,
+                    'skipped_frames': skipped_frames,
                     'fps': fps,
                     'width': width,
                     'height': height,
+                    'resolution_scale': self.resolution_scale,
                     'config': self.config.__dict__,
-                    'has_gps_data': gps_data is not None,
-                    'gps_points_used': len(gps_data) if gps_data else 0,
+                    'gps_synchronization': sync_stats,
                     'geolocated_objects': len(self.track_locations),
                     'user_quit': user_quit,
-                    'processing_times': {
-                        'mean': np.mean(self.processing_times) if self.processing_times else 0,
-                        'std': np.std(self.processing_times) if self.processing_times else 0,
-                        'min': np.min(self.processing_times) if self.processing_times else 0,
-                        'max': np.max(self.processing_times) if self.processing_times else 0
-                    }
+                    'show_realtime': self.show_realtime,
+                    'processing_mode': 'gps_synced' if self.gps_synchronizer else 'frame_skip'
                 }
             )
         
         processed_tracks = len([t for t in all_tracks.values() if len(t) >= 3])
         geolocated_count = len(self.track_locations)
         
-        self.logger.info(
-            f"Final results: {processed_tracks} well-tracked objects, "
-            f"{geolocated_count} geolocated static objects"
-        )
+        self.logger.info("🎉 PROCESSING COMPLETE!")
+        self.logger.info(f"   📊 Well-tracked objects: {processed_tracks}")
+        self.logger.info(f"   📍 Geolocated static objects: {geolocated_count}")
         
         return all_tracks
-    
-    def _synchronize_gps_with_frames(self, gps_data: List[GPSData], 
-                                    total_frames: int, fps: float) -> None:
-        """Synchronize GPS data with video frames"""
-        if not gps_data:
-            return
-        
-        # Convert GPS timestamps to relative time
-        start_time = gps_data[0].timestamp
-        gps_times = [(gps.timestamp - start_time) for gps in gps_data]
-        
-        # Map each frame to closest GPS point
-        for frame in range(total_frames):
-            frame_time = frame / fps
-            
-            # Find closest GPS point
-            if gps_times:
-                closest_idx = min(range(len(gps_times)), 
-                                 key=lambda i: abs(gps_times[i] - frame_time))
-                self.frame_to_gps[frame] = gps_data[closest_idx]
     
     def _update_gps_tracks(self, tracks: List[Track], gps_data: GPSData, frame_idx: int) -> None:
         """Update GPS data for active tracks"""
@@ -315,12 +373,11 @@ class EnhancedLightPostTracker:
             if track.track_id not in self.gps_tracks:
                 self.gps_tracks[track.track_id] = []
             
-            # Only add GPS data every few frames to avoid redundancy
-            if frame_idx % self.config.gps_frame_interval == 0:
-                self.gps_tracks[track.track_id].append(gps_data)
+            # Add GPS data for this track
+            self.gps_tracks[track.track_id].append(gps_data)
     
     def _calculate_object_geolocations(self, all_tracks: Dict[int, List[Dict]]) -> None:
-        """Calculate real-world geolocations for tracked objects"""
+        """Calculate real-world geolocations for tracked objects using GPS data"""
         
         for track_id, track_history in all_tracks.items():
             # Filter for static, well-tracked objects
@@ -372,21 +429,26 @@ class EnhancedLightPostTracker:
                                    track_history: List[Dict]) -> Optional[GeoLocation]:
         """Estimate geolocation for a single tracked object"""
         
-        # Get frames with GPS data
-        gps_frames = [t for t in track_history if t.get('has_gps', False)]
-        
-        if len(gps_frames) < 3:
+        # Get track's GPS data
+        if track_id not in self.gps_tracks or len(self.gps_tracks[track_id]) < 3:
             return None
         
+        gps_points = self.gps_tracks[track_id]
         estimated_positions = []
         
-        for detection in gps_frames:
-            # Get GPS data for this frame
-            frame_idx = detection['frame']
-            if frame_idx not in self.frame_to_gps:
+        # For each GPS point, estimate object location
+        for i, gps_point in enumerate(gps_points):
+            # Find corresponding detection in track history
+            detection = None
+            for hist_entry in track_history:
+                if hist_entry.get('has_gps', False):
+                    # This is a simplified mapping - could be improved
+                    detection = hist_entry
+                    break
+            
+            if detection is None:
                 continue
             
-            gps_point = self.frame_to_gps[frame_idx]
             bbox = detection['bbox']
             
             # Estimate distance to object
@@ -405,7 +467,7 @@ class EnhancedLightPostTracker:
                 'lon': obj_lon,
                 'distance': distance,
                 'confidence': detection['score'],
-                'frame': frame_idx
+                'gps_point': gps_point
             })
         
         if not estimated_positions:
@@ -435,7 +497,7 @@ class EnhancedLightPostTracker:
             longitude=avg_lon,
             accuracy=max(1.0, accuracy),
             reliability=reliability,
-            timestamp=estimated_positions[-1]['frame']
+            timestamp=estimated_positions[-1]['gps_point'].timestamp
         )
     
     def _estimate_object_distance(self, bbox: List[float]) -> float:
@@ -490,7 +552,8 @@ class EnhancedLightPostTracker:
             f"Frame: {frame_idx}",
             f"GPS: {gps_data.latitude:.6f}, {gps_data.longitude:.6f}",
             f"Heading: {gps_data.heading:.1f}°",
-            f"Objects tracked: {len(self.tracker.active_tracks)}"
+            f"Objects tracked: {len(self.tracker.active_tracks)}",
+            f"GPS SYNC: ACTIVE"  # Show GPS sync status
         ]
         
         y_offset = 30
@@ -559,10 +622,8 @@ class EnhancedLightPostTracker:
                     "reliability": round(location.reliability, 3),
                     "accuracy_meters": round(location.accuracy, 1),
                     "detection_count": track_info.get('detection_count', 0),
-                    "first_frame": track_info.get('first_frame', 0),
-                    "last_frame": track_info.get('last_frame', 0),
-                    "duration_frames": track_info.get('duration_frames', 0),
-                    "estimated_distance_m": track_info.get('avg_distance', 0.0)
+                    "gps_synced": True,  # Mark as GPS synchronized
+                    "processing_method": "gps_frame_sync"
                 }
             }
             features.append(feature)
@@ -571,44 +632,54 @@ class EnhancedLightPostTracker:
             "type": "FeatureCollection",
             "features": features,
             "metadata": {
-                "generator": "Argus Track Enhanced Light Post Tracker",
+                "generator": "Argus Track Enhanced Light Post Tracker - GPS Synced",
                 "total_locations": len(features),
                 "min_reliability_threshold": min_reliability,
                 "coordinate_system": "WGS84",
-                "gps_based_geolocation": True
+                "gps_based_geolocation": True,
+                "processing_mode": "gps_synchronized_frames",
+                "sync_statistics": self.gps_synchronizer.get_processing_statistics() if self.gps_synchronizer else {}
             }
         }
         
         with open(output_path, 'w') as f:
             json.dump(geojson, f, indent=2)
         
-        self.logger.info(f"Exported {len(features)} geolocated objects to GeoJSON: {output_path}")
+        self.logger.info(f"Exported {len(features)} GPS-synced geolocated objects to GeoJSON: {output_path}")
     
     def _get_track_summary(self, track_id: int) -> Dict[str, Any]:
         """Get summary statistics for a track"""
         if track_id not in self.gps_tracks:
             return {}
         
+        gps_points = len(self.gps_tracks[track_id])
+        
         return {
             'avg_confidence': 0.8,
-            'detection_count': len(self.gps_tracks[track_id]),
-            'first_frame': 0,
-            'last_frame': 100,
-            'duration_frames': 100,
-            'avg_distance': 25.0
+            'detection_count': gps_points,
+            'gps_synchronized': True
         }
 
     def get_enhanced_tracking_statistics(self) -> Dict[str, Any]:
-        """Get comprehensive tracking statistics with geolocation info"""
+        """Get comprehensive tracking statistics with GPS sync info"""
         base_stats = self.get_track_statistics()
+        
+        # Calculate performance metrics
+        avg_processing_time = np.mean(self.processing_times) if self.processing_times else 0
+        effective_fps = 1.0 / avg_processing_time if avg_processing_time > 0 else 0
+        
+        # GPS synchronization statistics
+        sync_stats = self.gps_synchronizer.get_processing_statistics() if self.gps_synchronizer else {}
         
         enhanced_stats = {
             **base_stats,
             'geolocated_objects': len(self.track_locations),
             'avg_reliability': np.mean([loc.reliability for loc in self.track_locations.values()]) if self.track_locations else 0.0,
             'avg_accuracy_meters': np.mean([loc.accuracy for loc in self.track_locations.values()]) if self.track_locations else 0.0,
-            'gps_data_available': len(self.frame_to_gps) > 0,
-            'gps_coverage_percent': len(self.frame_to_gps) / max(1, len(self.tracker.get_all_tracks())) * 100
+            'gps_synchronization': sync_stats,
+            'processing_fps': effective_fps,
+            'avg_processing_ms': avg_processing_time * 1000,
+            'processing_mode': 'gps_synced' if self.gps_synchronizer else 'frame_skip'
         }
         
         return enhanced_stats

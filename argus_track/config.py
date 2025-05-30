@@ -50,20 +50,20 @@ class TrackerConfig:
     def create_optimized_config(cls) -> 'TrackerConfig':
         """Create optimized configuration for static LED detection"""
         return cls(
-            track_thresh=0.1,              # Higher confidence threshold
-            match_thresh=0.6,              # More lenient matching for static objects
+            track_thresh=0.3,              # Higher confidence threshold
+            match_thresh=0.3,              # More lenient matching for static objects
             track_buffer=150,              # Longer buffer for static objects
-            min_box_area=300.0,            # Filter out small detections
-            static_threshold=8.0,          # Allow some camera shake
+            min_box_area=200.0,            # Filter out small detections
+            static_threshold=5.0,          # Allow some camera shake
             min_static_frames=20,          # More frames needed for static confirmation
             max_track_age=2000,            # Very long track lifetime
-            min_hits=8,                    # More hits required for confirmation
+            min_hits=5,                    # More hits required for confirmation
             max_time_lost=75,              # Longer time before considering lost
             merge_distance_threshold=50.0, # Merge nearby duplicate tracks
-            merge_iou_threshold=0.4,       # IoU threshold for merging
+            merge_iou_threshold=0.5,       # IoU threshold for merging
             enable_track_merging=True,     # Enable merging
             gps_frame_interval=6,          # GPS sync
-            min_gps_points=8,              # More GPS points for better accuracy
+            min_gps_points=5,              # More GPS points for better accuracy
             max_geolocation_std=0.00005    # Stricter geolocation reliability
         )
     
