@@ -1,0 +1,10 @@
+# Custom ByteTrack configuration optimized for static light post tracking
+
+tracker_type: bytetrack
+track_high_thresh: 0.20  # Lower threshold to detect more objects
+track_low_thresh: 0.05   # Very low threshold for second association stage
+new_track_thresh: 0.20   # Threshold for creating new tracks
+track_buffer: 100        # Larger buffer for static objects
+match_thresh: 0.8        # Higher match threshold for better track consistency
+fuse_score: True         # Fuse detection scores with IoU for better matching
+# min_box_area: 200      # Minimum bounding box area

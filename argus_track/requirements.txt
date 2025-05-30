@@ -81,3 +81,30 @@ python-dateutil>=2.8.0  # Enhanced date parsing
 
 # Process management
 psutil>=5.8.0  # For system monitoring during processing
+
+# Core Ultralytics
+ultralytics>=8.0.0
+
+# Core dependencies
+numpy>=1.19.0
+scipy>=1.5.0
+opencv-python>=4.5.0
+filterpy>=1.4.5
+
+# GPS and geolocation
+pyproj>=3.0.0
+scikit-learn>=0.24.0
+
+# Visualization
+matplotlib>=3.3.0
+seaborn>=0.11.0
+
+# GPS extraction
+beautifulsoup4>=4.9.0
+lxml>=4.6.0
+
+# Optional: GoPro telemetry extraction
+# gopro-overlay>=0.10.0
+
+# For GeoJSON export
+geojson>=2.5.0

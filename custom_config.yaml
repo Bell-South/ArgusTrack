@@ -1,0 +1,13 @@
+track_thresh: 0.1
+match_thresh: 0.3
+track_buffer: 100
+min_box_area: 200.0
+static_threshold: 15.0  # Increased from default
+min_static_frames: 5    # Reduced from default
+max_track_age: 1000
+min_hits: 5
+max_time_lost: 70
+merge_distance_threshold: 30.0
+merge_iou_threshold: 0.5
+enable_track_merging: true
+gps_frame_interval: 6
