@@ -6,7 +6,6 @@ import numpy as np
 
 from .detection import Detection
 
-
 @dataclass
 class Track:
     """Represents a tracked object through multiple frames"""

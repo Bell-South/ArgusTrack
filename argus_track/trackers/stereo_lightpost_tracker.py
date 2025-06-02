@@ -10,12 +10,12 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
 import json
 
+from ultralytics import YOLO
 from ..config import TrackerConfig, StereoCalibrationConfig
 from ..core import Detection, GPSData
 from ..core.stereo import StereoDetection, StereoFrame, StereoTrack
 from ..detectors import ObjectDetector
 from ..stereo import StereoMatcher, StereoTriangulator, StereoCalibrationManager
-from ..trackers import ByteTrack
 from ..utils.visualization import draw_tracks
 from ..utils.io import save_tracking_results
 from ..utils.gps_utils import sync_gps_with_frames, GeoLocation
@@ -38,7 +38,7 @@ class EnhancedStereoLightPostTracker:
     
     def __init__(self, 
                  config: TrackerConfig,
-                 detector: ObjectDetector,
+                 model_path: str,
                  stereo_calibration: StereoCalibrationConfig):
         """
         Initialize enhanced stereo light post tracker
@@ -49,7 +49,7 @@ class EnhancedStereoLightPostTracker:
             stereo_calibration: Stereo camera calibration
         """
         self.config = config
-        self.detector = detector
+        # self.detector = detector
         self.logger = logging.getLogger(f"{__name__}.EnhancedStereoLightPostTracker")
         
         # Stereo processing components
@@ -62,8 +62,9 @@ class EnhancedStereoLightPostTracker:
         self.triangulator = StereoTriangulator(stereo_calibration)
         
         # Tracking components
-        self.left_tracker = ByteTrack(config)
-        self.right_tracker = ByteTrack(config)
+        self.model = YOLO(model_path)
+        # self.left_tracker = ByteTrack(config)
+        # self.right_tracker = ByteTrack(config)
         
         # Stereo tracking data
         self.stereo_tracks: Dict[int, StereoTrack] = {}

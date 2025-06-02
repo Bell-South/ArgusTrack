@@ -1,11 +1,11 @@
 """Utility functions for ByteTrack system"""
 
+from .static_car_detector import StaticCarDetector, create_static_car_detector
 from .iou import calculate_iou, calculate_iou_matrix
 from .visualization import draw_tracks, create_track_overlay
 from .io import save_tracking_results, load_gps_data, setup_logging
 from .gps_utils import GPSInterpolator, CoordinateTransformer
-from .performance import PerformanceMonitor, PerformanceMetrics
-from .config_validator import ConfigValidator, ConfigLoader
+from .overlap_fixer import OverlapFixer
 
 __all__ = [
     "calculate_iou",
@@ -16,9 +16,8 @@ __all__ = [
     "load_gps_data",
     "setup_logging",
     "GPSInterpolator",
-    "CoordinateTransformer",
-    "PerformanceMonitor",
-    "PerformanceMetrics",
-    "ConfigValidator",
-    "ConfigLoader"
+    "StaticCarDetector",
+    "create_static_car_detector",
+    "OverlapFixer",
+    "CoordinateTransformer"
 ]

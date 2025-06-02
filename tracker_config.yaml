@@ -1,0 +1,33 @@
+#Custom ByteTrack configuration for LED tracking
+
+# Tracker type
+tracker_type: bytetrack
+
+# Track lifecycle management
+track_thresh: 0.25          # High confidence threshold for track creation
+track_buffer: 120           # Keep lost tracks for 120 frames (longer memory)
+match_thresh: 0.8           # High IoU threshold for matching (stricter)
+frame_rate: 60              # Video frame rate
+
+# ID management (CRITICAL FOR YOUR ISSUES)
+track_high_thresh: 0.6      # High confidence detections
+track_low_thresh: 0.1       # Low confidence detections (for continuity)
+new_track_thresh: 0.7       # Threshold for creating new tracks (higher = less new IDs)
+
+# Track confirmation
+min_box_area: 10            # Minimum bounding box area
+track_activation: 3         # Frames needed to confirm a track (reduces premature IDs)
+
+# Advanced ByteTrack parameters
+# These control the two-stage association that prevents ID reuse
+alpha: 0.9                  # Smoothing parameter for track prediction
+beta: 0.1                   # Association threshold for second stage matching
+
+# Track removal (PREVENTS ID REUSE)
+remove_thresh: 200          # Frames before permanently removing a track ID
+max_time_lost: 120          # Maximum frames a track can be lost before removal
+
+# Detection filtering
+min_confidence: 0.25        # Minimum detection confidence
+nms_iou: 0.3               # Non-maximum suppression IoU (ADDRESSES MULTIPLE IDs)
+max_detections: 100         # Maximum detections per frame
