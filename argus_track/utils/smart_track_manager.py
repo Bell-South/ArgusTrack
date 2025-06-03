@@ -84,6 +84,10 @@ class CleanTrackManager:
         self.total_resurrections_prevented = 0
         self.fragmentation_fixes = 0
         
+        self.track_positions = {}  # track_id -> last_known_position  
+        self.track_death_positions = {}  # track_id -> position_when_lost
+        self.forbidden_resurrections = set()  # track_ids that should never resurrect
+        
         self.logger.info("Clean Track Manager initialized")
     
     def update_movement_context(self, vehicle_speed: float, 
@@ -116,9 +120,7 @@ class CleanTrackManager:
             Detections with clean track IDs
         """
         processed_detections = []
-        unmatched_detections = []
         
-        # Phase 1: Match detections to active tracks
         for detection in detections:
             original_track_id = detection.track_id
             
@@ -132,49 +134,67 @@ class CleanTrackManager:
             # Update track memory
             self._update_track_memory(detection, frame_id)
         
-        # Phase 2: Handle lost tracks
+        if frame_id % 20 == 0:
+            self._cleanup_old_tracks()
+
         self._handle_lost_tracks(frame_id)
         
         return processed_detections
     
-    def _get_clean_track_id(self, original_id: int, detection: Detection, 
-                           frame_id: int) -> int:
-        """
-        Get clean track ID using GPS movement logic
+    def _get_clean_track_id(self, original_id: int, detection: Detection, frame_id: int) -> int:
+        """Enhanced version that prevents fragmentation and resurrection"""
         
-        Prevents resurrection of tracks that should be behind the vehicle
-        """
-        # If this is a forbidden ID (too far behind), assign new ID
+        detection_center = detection.center
+        
+        # ANTI-FRAGMENTATION: Check if this detection is very close to an existing active track
+        for active_id in self.active_track_ids:
+            if active_id in self.track_positions:
+                distance = np.linalg.norm(detection_center - self.track_positions[active_id])
+                if distance < 25.0:  # Within 25 pixels = same object (fragmentation)
+                    self.logger.info(f"Frame {frame_id}: Prevented fragmentation {original_id} -> {active_id}")
+                    return active_id
+        
+        # ANTI-RESURRECTION: Check forbidden resurrections
+        if original_id in self.forbidden_resurrections:
+            new_id = self._assign_new_track_id()
+            self.total_resurrections_prevented += 1
+            self.logger.info(f"Frame {frame_id}: Prevented forbidden resurrection {original_id} -> {new_id}")
+            return new_id
+        
+        # ENHANCED RESURRECTION CHECK: Only resurrect if spatially makes sense
+        if original_id in self.lost_track_ids:
+            if not self._resurrection_makes_spatial_sense(original_id, detection, frame_id):
+                # Block this resurrection and forbid future ones
+                self.forbidden_resurrections.add(original_id)
+                new_id = self._assign_new_track_id()
+                self.total_resurrections_prevented += 1
+                self.logger.info(f"Frame {frame_id}: Prevented illogical resurrection {original_id} -> {new_id}")
+                return new_id
+            else:
+                # Resurrection is OK - remove from lost tracks
+                self.lost_track_ids.discard(original_id)
+                self.active_track_ids.add(original_id)
+                self.logger.info(f"Frame {frame_id}: Allowed logical resurrection {original_id}")
+                return original_id
+        
+        # If this ID is forbidden (was problematic before), assign new one
         if original_id in self.id_reuse_forbidden:
             new_id = self._assign_new_track_id()
             self.total_resurrections_prevented += 1
-            self.logger.debug(f"Frame {frame_id}: Prevented resurrection of ID {original_id} → {new_id}")
+            self.logger.info(f"Frame {frame_id}: Prevented reuse of forbidden ID {original_id} -> {new_id}")
             return new_id
         
-        # If track is in active memory, continue using it
-        if original_id in self.track_memories:
+        # This appears to be a new track - use original ID if available
+        if original_id not in self.track_memories and original_id not in self.active_track_ids:
+            self.active_track_ids.add(original_id)
+            self.total_tracks_created += 1
             return original_id
         
-        # Check if track was recently lost and could reappear
-        if original_id in self.lost_track_ids:
-            # Only allow reappearance if vehicle hasn't moved too far
-            if self._should_allow_track_reappearance(original_id, detection, frame_id):
-                # Move back to active
-                self.lost_track_ids.discard(original_id)
-                self.active_track_ids.add(original_id)
-                self.logger.debug(f"Frame {frame_id}: Track {original_id} reappeared")
-                return original_id
-            else:
-                # Vehicle moved too far, assign new ID
-                new_id = self._assign_new_track_id()
-                self.total_resurrections_prevented += 1
-                self.logger.debug(f"Frame {frame_id}: Blocked distant reappearance {original_id} → {new_id}")
-                return new_id
-        
-        # This is a completely new track
-        self.active_track_ids.add(original_id)
-        return original_id
-    
+        # ID conflict - assign new one
+        new_id = self._assign_new_track_id()
+        self.total_tracks_created += 1
+        return new_id
+
     def _should_allow_track_reappearance(self, track_id: int, detection: Detection, 
                                        frame_id: int) -> bool:
         """
@@ -220,13 +240,40 @@ class CleanTrackManager:
         self.total_tracks_created += 1
         
         return new_id
-    
+
+    def _resurrection_makes_spatial_sense(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+        """Check if resurrecting this track makes spatial sense"""
+        
+        if track_id not in self.track_death_positions:
+            return False  # Don't know where it died, don't resurrect
+        
+        death_position = self.track_death_positions[track_id]
+        new_position = detection.center
+        
+        # Calculate distance from death position
+        distance = np.linalg.norm(new_position - death_position)
+        
+        # For light posts (static objects), should appear very close to where they "died"
+        max_allowed_distance = 30.0  # 30 pixels tolerance
+        
+        # If vehicle moved significantly, be more restrictive
+        if self.total_distance_moved > 10.0:  # 10 meters
+            max_allowed_distance = 15.0  # Only 15 pixels tolerance
+        
+        spatial_ok = distance <= max_allowed_distance
+        
+        if not spatial_ok:
+            self.logger.warning(f"Resurrection blocked: track {track_id} moved {distance:.1f}px from death position")
+        
+        return spatial_ok
+
     def _update_track_memory(self, detection: Detection, frame_id: int):
-        """Update or create track memory"""
+        """Enhanced track memory update with position tracking"""
+        
         track_id = detection.track_id
         
+        # Call original memory update logic
         if track_id not in self.track_memories:
-            # Create new track memory
             self.track_memories[track_id] = TrackMemory(
                 track_id=track_id,
                 last_seen_frame=frame_id,
@@ -236,25 +283,52 @@ class CleanTrackManager:
         
         # Update existing memory
         self.track_memories[track_id].update(detection, frame_id)
-    
+        
+        # ENHANCEMENT: Always track current position
+        self.track_positions[track_id] = detection.center.copy()
+
     def _handle_lost_tracks(self, current_frame: int):
-        """Identify and handle tracks that weren't detected this frame"""
-        current_active = set()
+        """Enhanced lost track handling with death position tracking"""
         
         # Find tracks that were updated this frame
+        current_active = set()
         for track_id, memory in self.track_memories.items():
             if memory.last_seen_frame == current_frame:
                 current_active.add(track_id)
         
-        # Find tracks that were lost
-        lost_tracks = self.active_track_ids - current_active
+        # Find newly lost tracks
+        newly_lost = self.active_track_ids - current_active
         
-        for lost_track_id in lost_tracks:
-            self.active_track_ids.discard(lost_track_id)
-            self.lost_track_ids.add(lost_track_id)
-            self.total_tracks_lost += 1
+        for track_id in newly_lost:
+            # Move to lost tracks
+            self.active_track_ids.discard(track_id)
+            self.lost_track_ids.add(track_id)
             
-            self.logger.debug(f"Track {lost_track_id} lost at frame {current_frame}")
+            # ENHANCEMENT: Remember where this track "died"
+            if track_id in self.track_positions:
+                self.track_death_positions[track_id] = self.track_positions[track_id].copy()
+            
+            self.total_tracks_lost += 1
+            self.logger.debug(f"Track {track_id} lost at frame {current_frame}")
+
+    def _cleanup_old_tracks(self):
+        """Cleanup old track data to prevent memory bloat"""
+        
+        # Move very old lost tracks to forbidden resurrections
+        very_old_tracks = []
+        for track_id in self.lost_track_ids:
+            if track_id in self.track_memories:
+                memory = self.track_memories[track_id]
+                if hasattr(memory, 'last_seen_frame'):
+                    # If track was lost more than 30 frames ago, forbid resurrection
+                    current_frame = max([m.last_seen_frame for m in self.track_memories.values()])
+                    if current_frame - memory.last_seen_frame > 30:
+                        very_old_tracks.append(track_id)
+        
+        for track_id in very_old_tracks:
+            self.lost_track_ids.discard(track_id)
+            self.forbidden_resurrections.add(track_id)
+            self.logger.debug(f"Track {track_id} moved to forbidden resurrections (too old)")
     
     def _mark_distant_tracks_as_forbidden(self):
         """Mark tracks as forbidden for reuse when vehicle moves forward significantly"""
@@ -303,8 +377,10 @@ class CleanTrackManager:
             self.id_reuse_forbidden = set(forbidden_list[-400:])  # Keep newest 400
     
     def get_statistics(self) -> Dict[str, Any]:
-        """Get comprehensive tracking statistics"""
-        return {
+        """Enhanced statistics with fragmentation and resurrection info"""
+        
+        # Your existing statistics
+        base_stats = {
             'active_tracks': len(self.active_track_ids),
             'lost_tracks': len(self.lost_track_ids),
             'tracks_in_memory': len(self.track_memories),
@@ -312,8 +388,19 @@ class CleanTrackManager:
             'total_tracks_created': self.total_tracks_created,
             'total_tracks_lost': self.total_tracks_lost,
             'resurrections_prevented': self.total_resurrections_prevented,
-            'fragmentation_fixes': self.fragmentation_fixes,
             'next_track_id': self.next_track_id,
             'vehicle_speed': self.vehicle_speed,
             'distance_moved': self.total_distance_moved
         }
+        
+        # ADD THESE NEW METRICS:
+        enhanced_stats = {
+            **base_stats,
+            'forbidden_resurrections': len(self.forbidden_resurrections),
+            'death_positions_tracked': len(self.track_death_positions),
+            'current_positions_tracked': len(self.track_positions),
+            'avg_tracks_per_frame': len(self.active_track_ids),
+            'resurrection_prevention_rate': len(self.forbidden_resurrections) / max(1, self.total_tracks_created)
+        }
+        
+        return enhanced_stats
