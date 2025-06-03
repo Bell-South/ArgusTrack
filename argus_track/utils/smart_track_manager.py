@@ -20,7 +20,7 @@ from typing import List, Dict, Optional, Set, Any
 from dataclasses import dataclass, field
 import logging
 import time
-
+from ..utils.gps_motion_prediction import MotionPredictor, create_motion_prediction_config, VehicleMovement
 from ..core import Detection
 from ..config import TrackerConfig
 
@@ -87,9 +87,56 @@ class CleanTrackManager:
         self.track_positions = {}  # track_id -> last_known_position  
         self.track_death_positions = {}  # track_id -> position_when_lost
         self.forbidden_resurrections = set()  # track_ids that should never resurrect
+
+        self.motion_config = create_motion_prediction_config(
+        object_distance_m=30.0,
+        gps_accuracy_threshold_m=3.0, 
+        prediction_tolerance_px=15.0,
+        enable_debug=True
+        )
+        self.motion_predictor = MotionPredictor(self.motion_config)
+
+        # GPS context
+        self.current_gps = None
+        self.previous_gps = None
+        # Initialize vehicle movement tracking
+        self.current_vehicle_movement = None
+        self.previous_vehicle_movement = None
+
+        self.motion_predictions = {}
         
+        self.logger.info("Motion prediction enabled in CleanTrackManager")
+
         self.logger.info("Clean Track Manager initialized")
     
+    def update_gps_context(self, current_gps, previous_gps=None):
+        """Update GPS context for motion prediction"""
+        # Don't overwrite previous_gps if we already have one from the actual previous frame
+        if self.current_gps is not None:
+            self.previous_gps = self.current_gps
+        
+        self.current_gps = current_gps
+        
+        # Only use passed previous_gps if we don't have context yet
+        if self.previous_gps is None and previous_gps is not None:
+            self.previous_gps = previous_gps
+        
+        self.logger.debug(f"GPS context updated: prev_time={getattr(self.previous_gps, 'timestamp', 'None')}, "
+                        f"curr_time={getattr(self.current_gps, 'timestamp', 'None')}")
+
+    def update_movement_context_try(self, gps_data):
+        """Update movement context from GPS data"""
+        if gps_data:
+            # Calculate speed in m/s
+            speed_ms = getattr(gps_data, 'speed', 0.0) if gps_data else 0.0
+            
+            # Create a simple movement object
+            from collections import namedtuple
+            VehicleMovement = namedtuple('VehicleMovement', ['speed_ms'])
+            self.current_vehicle_movement = VehicleMovement(speed_ms=speed_ms)
+        else:
+            self.current_vehicle_movement = None
+
     def update_movement_context(self, vehicle_speed: float, 
                                distance_moved: float, total_distance: float):
         """Update GPS movement context for tracking decisions"""
@@ -106,6 +153,126 @@ class CleanTrackManager:
             self._cleanup_distant_tracks()
             self.distance_since_last_cleanup = 0.0
     
+    def _calculate_association_tolerance(self) -> float:
+        """Calculate dynamic tolerance based on vehicle motion"""
+        base_tolerance = 300.0
+        
+        if self.vehicle_speed > 1.0:  # Vehicle moving
+            # Increase tolerance based on speed (max 2x for 10+ m/s)
+            speed_factor = min(2.0, 1.0 + (self.vehicle_speed / 10.0))
+            return base_tolerance * speed_factor
+        
+        return base_tolerance
+
+    def _generate_motion_predictions(self, frame_id: int) -> Dict[int, np.ndarray]:
+        """Generate pixel-space predictions and maintain track continuity"""
+        self.motion_predictions.clear()
+        
+        if self.previous_gps is None or self.current_gps is None:
+            self.logger.debug(f"Frame {frame_id}: No GPS data for motion prediction")
+            return {}
+        
+        # ENHANCED: Include lost tracks that might reappear
+        current_positions = {}
+        
+        # Add active tracks
+        for track_id in self.active_track_ids:
+            if track_id in self.track_positions:
+                current_positions[track_id] = self.track_positions[track_id]
+        
+        # NEW: Add recently lost tracks (within 60 frames = ~6 seconds)
+        recently_lost_tracks = {}
+        for track_id in list(self.lost_track_ids):
+            if track_id in self.track_memories:
+                memory = self.track_memories[track_id]
+                frames_since_lost = frame_id - memory.last_seen_frame
+                
+                # Keep recently lost tracks alive with predictions
+                if frames_since_lost <= 60 and track_id in self.track_positions:
+                    recently_lost_tracks[track_id] = self.track_positions[track_id]
+                    self.logger.debug(f"Frame {frame_id}: Including lost track {track_id} "
+                                    f"in predictions (lost {frames_since_lost} frames ago)")
+        
+        # Combine active and recently lost
+        all_positions = {**current_positions, **recently_lost_tracks}
+        
+        if not all_positions:
+            self.logger.debug(f"Frame {frame_id}: No track positions for prediction")
+            return {}
+        
+        try:
+            # Use existing MotionPredictor
+            predictions = self.motion_predictor.predict_object_positions(
+                self.previous_gps, self.current_gps, all_positions
+            )
+            
+            # Store for debugging and extract positions
+            self.motion_predictions = predictions
+            predicted_positions = {}
+            
+            for track_id, info in predictions.items():
+                predicted_positions[track_id] = info['predicted_position']
+                confidence = info['confidence']
+                
+                # NEW: Reactivate lost tracks with good predictions
+                if track_id in recently_lost_tracks and confidence > 0.6:
+                    self.logger.info(f"Frame {frame_id}: Reactivating lost track {track_id} "
+                                f"with prediction confidence {confidence:.2f}")
+                    self.lost_track_ids.discard(track_id)
+                    self.active_track_ids.add(track_id)
+                    
+                    # Update position with prediction
+                    self.track_positions[track_id] = predicted_positions[track_id]
+                
+                self.logger.debug(f"Frame {frame_id}: Track {track_id} predicted at "
+                                f"{predicted_positions[track_id]} (conf: {confidence:.2f})")
+            
+            return predicted_positions
+            
+        except Exception as e:
+            self.logger.error(f"Motion prediction failed: {e}")
+            return {}
+
+    def _generate_motion_predictions_bkp(self, frame_id: int) -> Dict[int, np.ndarray]:
+        """Generate pixel-space predictions for active tracks"""
+        self.motion_predictions.clear()
+        
+        if self.previous_gps is None or self.current_gps is None:
+            self.logger.debug(f"Frame {frame_id}: No GPS data for motion prediction")
+            return {}
+        
+        # Get current track positions
+        current_positions = {}
+
+        for track_id in self.active_track_ids:
+            if track_id in self.track_positions:
+                current_positions[track_id] = self.track_positions[track_id]
+        
+        if not current_positions:
+            self.logger.debug(f"Frame {frame_id}: No active track positions")
+            return {}
+        
+        try:
+            # Use existing MotionPredictor
+            predictions = self.motion_predictor.predict_object_positions(
+                self.previous_gps, self.current_gps, current_positions
+            )
+            
+            # Store for debugging and extract positions
+            self.motion_predictions = predictions
+            predicted_positions = {}
+            
+            for track_id, info in predictions.items():
+                predicted_positions[track_id] = info['predicted_position']
+                confidence = info['confidence']
+                self.logger.debug(f"Frame {frame_id}: Track {track_id} predicted at {predicted_positions[track_id]} (conf: {confidence:.2f})")
+            
+            return predicted_positions
+            
+        except Exception as e:
+            self.logger.error(f"Motion prediction failed: {e}")
+            return {}
+
     def process_frame_detections(self, detections: List[Detection], 
                                 frame_id: int, timestamp: float) -> List[Detection]:
         """
@@ -141,20 +308,71 @@ class CleanTrackManager:
         
         return processed_detections
     
-    def _get_clean_track_id(self, original_id: int, detection: Detection, frame_id: int) -> int:
-        """Enhanced version that prevents fragmentation and resurrection"""
+    def _handle_resurrection_and_new_tracks(self, original_id: int, detection: Detection, frame_id: int) -> int:
+        """Handle resurrection logic and new track creation with more lenient rules"""
         
-        detection_center = detection.center
+        # Check if this is a forbidden resurrection
+        if original_id in getattr(self, 'forbidden_resurrections', set()):
+            new_id = self._assign_new_track_id()
+            self.total_resurrections_prevented += 1
+            self.logger.info(f"Frame {frame_id}: Prevented forbidden resurrection {original_id} -> {new_id}")
+            return new_id
         
-        # ANTI-FRAGMENTATION: Check if this detection is very close to an existing active track
-        for active_id in self.active_track_ids:
-            if active_id in self.track_positions:
-                distance = np.linalg.norm(detection_center - self.track_positions[active_id])
-                if distance < 25.0:  # Within 25 pixels = same object (fragmentation)
-                    self.logger.info(f"Frame {frame_id}: Prevented fragmentation {original_id} -> {active_id}")
-                    return active_id
+        # Enhanced resurrection check - be more lenient for recent tracks
+        if original_id in self.lost_track_ids:
+            if self._resurrection_makes_spatial_sense_enhanced(original_id, detection, frame_id):
+                # Allow resurrection
+                self.lost_track_ids.discard(original_id)
+                self.active_track_ids.add(original_id)
+                self.logger.info(f"Frame {frame_id}: Allowed logical resurrection {original_id}")
+                return original_id
+            else:
+                # Block resurrection but be less aggressive
+                self.forbidden_resurrections.add(original_id)
+                new_id = self._assign_new_track_id()
+                self.total_resurrections_prevented += 1
+                self.logger.info(f"Frame {frame_id}: Prevented illogical resurrection {original_id} -> {new_id}")
+                return new_id
         
-        # ANTI-RESURRECTION: Check forbidden resurrections
+        # Create new track
+        new_id = self._assign_new_track_id()
+        return new_id
+
+    def _resurrection_makes_spatial_sense_enhanced(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+        """Enhanced spatial sense check for resurrections"""
+        
+        if track_id not in self.track_death_positions:
+            # If we don't know where it died, be more lenient
+            return True
+        
+        death_position = self.track_death_positions[track_id]
+        new_position = detection.center
+        distance = np.linalg.norm(new_position - death_position)
+        
+        # MUCH more lenient tolerance - static objects can appear to move significantly due to:
+        # 1. Vehicle movement between frames
+        # 2. Camera angle changes
+        # 3. Detection box variations
+        max_allowed_distance = 100.0  # Increased from 30px to 100px
+        
+        # Be even more lenient when vehicle is moving fast
+        if self.vehicle_speed > 2.0:
+            max_allowed_distance = 150.0  # Even higher tolerance for moving vehicle
+        
+        spatial_ok = distance <= max_allowed_distance
+        
+        if not spatial_ok:
+            self.logger.warning(f"Resurrection blocked: track {track_id} moved {distance:.1f}px "
+                            f"from death position (threshold: {max_allowed_distance:.1f}px)")
+        else:
+            self.logger.info(f"Resurrection allowed: track {track_id} moved {distance:.1f}px "
+                            f"within threshold {max_allowed_distance:.1f}px")
+        
+        return spatial_ok
+
+    def _handle_resurrection_and_new_tracks_bkp(self, original_id: int, detection: Detection, frame_id: int) -> int:
+        """Handle resurrection logic and new track creation (existing logic)"""
+
         if original_id in self.forbidden_resurrections:
             new_id = self._assign_new_track_id()
             self.total_resurrections_prevented += 1
@@ -194,6 +412,78 @@ class CleanTrackManager:
         new_id = self._assign_new_track_id()
         self.total_tracks_created += 1
         return new_id
+    
+    def _get_clean_track_id(self, original_id: int, detection: Detection, frame_id: int) -> int:
+        """Enhanced track ID assignment with motion prediction"""
+        detection_center = detection.center
+        
+        motion_predictions = self._generate_motion_predictions(frame_id)
+        
+        if motion_predictions:
+            best_match_id = None
+            best_distance = float('inf')
+            
+            for track_id, predicted_pos in motion_predictions.items():
+                distance = np.linalg.norm(detection_center - predicted_pos)
+                
+               
+                tolerance = self.motion_config.prediction_tolerance_px
+                if self.current_gps and hasattr(self.current_gps, 'speed') and self.current_gps.speed > 2.0:
+                    tolerance *= 2.0  # Double tolerance for fast movement
+                
+                if distance < tolerance and distance < best_distance:
+                    best_match_id = track_id
+                    best_distance = distance
+            
+            if best_match_id is not None:
+                # IMPORTANT: Reactivate the track if it was lost
+                if best_match_id in self.lost_track_ids:
+                    self.lost_track_ids.discard(best_match_id)
+                    self.active_track_ids.add(best_match_id)
+                    self.logger.info(f"Frame {frame_id}: Motion prediction reactivated track {best_match_id}")
+                
+                self.logger.info(f"Frame {frame_id}: Motion prediction match {original_id} -> {best_match_id} "
+                            f"(error: {best_distance:.1f}px)")
+                return best_match_id
+        
+        # Continue with existing fallback logic...
+        return self._get_fallback_track_id(original_id, detection, frame_id)
+
+    def _get_clean_track_id_bkp(self, original_id: int, detection: Detection, frame_id: int) -> int:
+        """Enhanced track ID assignment with motion prediction"""
+        detection_center = detection.center
+        
+        # PHASE 1: Try motion prediction matching first
+        motion_predictions = self._generate_motion_predictions(frame_id)
+        
+        if motion_predictions:
+            best_match_id = None
+            best_distance = float('inf')
+            
+            for track_id, predicted_pos in motion_predictions.items():
+                distance = np.linalg.norm(detection_center - predicted_pos)
+                
+                # Use motion prediction tolerance
+                if distance < self.motion_config.prediction_tolerance_px and distance < best_distance:
+                    best_match_id = track_id
+                    best_distance = distance
+            
+            if best_match_id is not None:
+                self.logger.info(f"Frame {frame_id}: Motion prediction match {original_id} -> {best_match_id} (error: {best_distance:.1f}px)")
+                return best_match_id
+        
+        # FALLBACK: Enhanced anti-fragmentation with dynamic tolerance
+        dynamic_tolerance = self._calculate_association_tolerance()
+        
+        for active_id in self.active_track_ids:
+            if active_id in self.track_positions:
+                distance = np.linalg.norm(detection_center - self.track_positions[active_id])
+                if distance < dynamic_tolerance:
+                    self.logger.info(f"Frame {frame_id}: Position-based match {original_id} -> {active_id} (distance: {distance:.1f}px)")
+                    return active_id
+        
+        # Continue with existing logic for resurrections and new tracks
+        return self._handle_resurrection_and_new_tracks(original_id, detection, frame_id)
 
     def _should_allow_track_reappearance(self, track_id: int, detection: Detection, 
                                        frame_id: int) -> bool:
@@ -287,7 +577,53 @@ class CleanTrackManager:
         # ENHANCEMENT: Always track current position
         self.track_positions[track_id] = detection.center.copy()
 
+    def _should_keep_track_alive(self, track_id: int, frame_id: int) -> bool:
+        """Determine if a track should be kept alive based on motion prediction"""
+        
+        if track_id not in self.track_memories:
+            return False
+        
+        memory = self.track_memories[track_id]
+        frames_since_seen = frame_id - memory.last_seen_frame
+        
+        # Keep tracks alive longer when vehicle is moving (they might reappear)
+        if self.vehicle_speed > 1.0:
+            max_frames_alive = 60  # 6 seconds at 10fps
+        else:
+            max_frames_alive = 30  # 3 seconds when stationary
+        
+        return frames_since_seen <= max_frames_alive
+
     def _handle_lost_tracks(self, current_frame: int):
+        """Enhanced lost track handling with motion prediction"""
+        
+        # Find tracks that were updated this frame
+        current_active = set()
+        for track_id, memory in self.track_memories.items():
+            if memory.last_seen_frame == current_frame:
+                current_active.add(track_id)
+        
+        # Find tracks that should be marked as lost
+        potentially_lost = self.active_track_ids - current_active
+        
+        for track_id in potentially_lost:
+            # Check if we should keep this track alive
+            if self._should_keep_track_alive(track_id, current_frame):
+                self.logger.debug(f"Frame {current_frame}: Keeping track {track_id} alive for motion prediction")
+                continue  # Don't mark as lost yet
+            
+            # Mark as truly lost
+            self.active_track_ids.discard(track_id)
+            self.lost_track_ids.add(track_id)
+            
+            # Remember where this track "died"
+            if track_id in self.track_positions:
+                self.track_death_positions[track_id] = self.track_positions[track_id].copy()
+            
+            self.total_tracks_lost += 1
+            self.logger.debug(f"Track {track_id} lost at frame {current_frame}")
+
+    def _handle_lost_tracks_bkp(self, current_frame: int):
         """Enhanced lost track handling with death position tracking"""
         
         # Find tracks that were updated this frame
@@ -376,7 +712,66 @@ class CleanTrackManager:
             forbidden_list = sorted(list(self.id_reuse_forbidden))
             self.id_reuse_forbidden = set(forbidden_list[-400:])  # Keep newest 400
     
+    def _get_fallback_track_id(self, original_id: int, detection, frame_id: int) -> int:
+        """
+        Fallback track ID assignment when motion prediction fails
+        Uses existing position-based matching and resurrection logic
+        """
+        detection_center = detection.center
+        
+        # Step 1: Try to match with existing active tracks (anti-fragmentation)
+        for active_id in self.active_track_ids:
+            if active_id in self.track_positions:
+                distance = np.linalg.norm(detection_center - self.track_positions[active_id])
+                
+                # Use dynamic tolerance based on vehicle speed if available
+                base_tolerance = 300.0  # Base tolerance in pixels
+                speed_factor = getattr(self, 'vehicle_speed', 0) * 2.0  # Extra tolerance for movement
+                dynamic_tolerance = base_tolerance + min(speed_factor, 25.0)  # Cap the adjustment
+                
+                if distance < dynamic_tolerance:
+                    self.logger.info(f"Frame {frame_id}: Prevented fragmentation {original_id} -> {active_id}")
+                    return active_id
+        
+        # Step 2: Check for logical resurrection of lost tracks
+        if hasattr(self, 'previous_track_positions') and self.previous_track_positions:
+            for prev_id, prev_pos in self.previous_track_positions.items():
+                if prev_id not in self.active_track_ids:  # Track is currently lost
+                    distance = np.linalg.norm(detection_center - prev_pos)
+                    
+                    # Use resurrection distance threshold (should be defined in your class)
+                    resurrection_threshold = getattr(self, 'resurrection_distance_threshold', 50.0)
+                    
+                    if distance < resurrection_threshold:
+                        # Additional check: ensure track hasn't moved too far from death position
+                        if hasattr(self, 'track_death_positions') and prev_id in self.track_death_positions:
+                            death_pos = self.track_death_positions[prev_id]
+                            death_distance = np.linalg.norm(detection_center - death_pos)
+                            
+                            # Logical resurrection threshold (should be defined in your class)
+                            logical_threshold = getattr(self, 'logical_resurrection_threshold', 75.0)
+                            
+                            if death_distance < logical_threshold:
+                                self.logger.info(f"Frame {frame_id}: Allowed logical resurrection {prev_id}")
+                                # Remove from death positions since it's resurrected
+                                if hasattr(self, 'track_death_positions'):
+                                    del self.track_death_positions[prev_id]
+                                return prev_id
+                            else:
+                                self.logger.warning(f"Resurrection blocked: track {prev_id} moved {death_distance:.1f}px from death position")
+                                self.logger.info(f"Frame {frame_id}: Prevented illogical resurrection {prev_id} -> {original_id}")
+                                return original_id
+                        else:
+                            # Simple resurrection without death position check
+                            self.logger.info(f"Frame {frame_id}: Allowed logical resurrection {prev_id}")
+                            return prev_id
+        
+        # Step 3: Return original ID (new track)
+        self.logger.info(f"Frame {frame_id}: New track {original_id}")
+        return original_id
+
     def get_statistics(self) -> Dict[str, Any]:
+
         """Enhanced statistics with fragmentation and resurrection info"""
         
         # Your existing statistics

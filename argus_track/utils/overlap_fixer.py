@@ -26,7 +26,11 @@ class OverlapFixer:
         self.overlap_threshold = overlap_threshold
         self.distance_threshold = distance_threshold
         self.logger = logging.getLogger(f"{__name__}.OverlapFixer")
-        
+
+        self.persistent_id_mapping: Dict[int, int] = {}  # ultralytics_id -> stable_id
+        self.stable_id_counter = 1
+        self.id_position_history: Dict[int, List[np.ndarray]] = {}  # stable_id -> recent_positions
+
         # Track ID consolidation
         self.id_mapping = {}  # original_id -> consolidated_id
         self.next_consolidated_id = 1
@@ -125,6 +129,24 @@ class OverlapFixer:
         return [detections[i] for i in sorted(keep_indices)]
     
     def _consolidate_track_ids(self, detections: List[Dict], current_gps: Optional['GPSData']) -> List[Dict]:
+        """Enhanced consolidation with persistent memory"""
+        
+        for detection in detections:
+            original_id = detection['track_id']
+            
+            # Get stable consolidated ID
+            consolidated_id = self._get_consolidated_id(detection, current_gps)
+            
+            # Update detection
+            detection['original_track_id'] = original_id
+            detection['track_id'] = consolidated_id
+            
+            if original_id != consolidated_id:
+                self.fixed_count += 1
+        
+        return detections
+
+    def _consolidate_track_ids_bkp(self, detections: List[Dict], current_gps: Optional['GPSData']) -> List[Dict]:
         """Consolidate track IDs to prevent multiple IDs for same object"""
         
         for detection in detections:
@@ -144,6 +166,63 @@ class OverlapFixer:
         return detections
     
     def _get_consolidated_id(self, detection: Dict, current_gps: Optional['GPSData']) -> int:
+        """Enhanced consolidation with persistent memory"""
+        original_id = detection['track_id']
+        detection_center = np.array([(detection['bbox'][0] + detection['bbox'][2]) / 2,
+                                   (detection['bbox'][1] + detection['bbox'][3]) / 2])
+        
+        # Check if we've seen this ultralytics ID before
+        if original_id in self.persistent_id_mapping:
+            stable_id = self.persistent_id_mapping[original_id]
+            self.logger.info(f"Reusing known mapping: {original_id} -> {stable_id}")
+            
+            # Update position history
+            if stable_id not in self.id_position_history:
+                self.id_position_history[stable_id] = []
+            self.id_position_history[stable_id].append(detection_center)
+            
+            # Keep only recent positions
+            if len(self.id_position_history[stable_id]) > 10:
+                self.id_position_history[stable_id] = self.id_position_history[stable_id][-10:]
+            
+            return stable_id
+        
+        # Check if this detection is close to any existing stable track
+        best_match_id = None
+        best_distance = float('inf')
+        
+        for stable_id, positions in self.id_position_history.items():
+            if not positions:
+                continue
+            
+            # Check distance to most recent positions
+            recent_positions = positions[-3:]  # Last 3 positions
+            for pos in recent_positions:
+                distance = np.linalg.norm(detection_center - pos)
+                
+                # Use spatial proximity to identify same object
+                if distance < 50.0 and distance < best_distance:  # 50px tolerance
+                    best_match_id = stable_id
+                    best_distance = distance
+        
+        if best_match_id is not None:
+            # Map to existing stable ID
+            self.persistent_id_mapping[original_id] = best_match_id
+            self.id_position_history[best_match_id].append(detection_center)
+            self.logger.info(f"Spatial match: {original_id} -> {best_match_id} (distance: {best_distance:.1f}px)")
+            return best_match_id
+        
+        # Create new stable ID
+        new_stable_id = self.stable_id_counter
+        self.stable_id_counter += 1
+        
+        self.persistent_id_mapping[original_id] = new_stable_id
+        self.id_position_history[new_stable_id] = [detection_center]
+        
+        self.logger.info(f"New stable ID: {original_id} -> {new_stable_id}")
+        return new_stable_id
+
+    def _get_consolidated_id_bkp(self, detection: Dict, current_gps: Optional['GPSData']) -> int:
         """Get consolidated track ID for detection"""
         original_id = detection['track_id']
         

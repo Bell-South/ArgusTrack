@@ -24,7 +24,7 @@ class TrackerConfig:
     
     # === STATIC CAR DETECTION ===
     enable_static_car_detection: bool = True   # Enable static car frame skipping
-    static_movement_threshold_m: float = 0.9   # Minimum movement to consider moving
+    static_movement_threshold_m: float = 0.3   # Minimum movement to consider moving
     static_time_threshold_s: float = 5.0       # Time before starting to skip frames
     
     # === OUTPUT SETTINGS ===
@@ -50,8 +50,8 @@ class TrackerConfig:
             
             # Static car detection
             enable_static_car_detection=True,
-            static_movement_threshold_m=0.5,  # Very sensitive
-            static_time_threshold_s=3.0,      # Start skipping quickly
+            static_movement_threshold_m=0.05,  # Very sensitive
+            static_time_threshold_s=5.0,      # Start skipping quickly
             
             # Output settings
             export_json=True,

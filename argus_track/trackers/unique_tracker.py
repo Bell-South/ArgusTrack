@@ -349,29 +349,32 @@ class UnifiedLightPostTracker:
         
         return R * c
     
-    def _process_frame(self, frame: np.ndarray, frame_id: int, 
-                      timestamp: float) -> List[Detection]:
+    def _process_frame(self, frame: np.ndarray, frame_id: int, timestamp: float) -> List[Detection]:
         """Process single frame with GPS-informed tracking"""
         
-        # Run YOLO tracking
+        # NEW: Update GPS context for motion prediction
+        if hasattr(self.track_manager, 'update_gps_context'):
+            self.track_manager.update_gps_context(self.current_gps, self.previous_gps)
+        
+        # Run YOLO tracking (existing code)
         track_params = self.config.get_ultralytics_track_params()
         results = self.model.track(frame, **track_params)
         
-        # Apply overlap fixer
+        # Apply overlap fixer (existing code)
         fixed_detections = self.overlap_fixer.fix_ultralytics_results(
             results[0], self.current_gps, frame_id
         )
         
-        # Convert to Detection objects
+        # Convert to Detection objects (existing code)
         raw_detections = self._convert_fixed_detections(fixed_detections, frame_id)
         
-        # Apply GPS-informed track management
+        # Apply GPS-informed track management (existing code)
         processed_detections = self.track_manager.process_frame_detections(
             raw_detections, frame_id, timestamp
         )
         
         return processed_detections
-    
+        
     def _convert_fixed_detections(self, fixed_detections: List[Dict], frame_id: int) -> List[Detection]:
         """Convert fixed detections to Detection objects"""
         detections = []
