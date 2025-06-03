@@ -28,7 +28,6 @@ from argus_track.core.stereo import StereoDetection, StereoFrame, StereoTrack
 from argus_track.trackers import EnhancedLightPostTracker
 from argus_track.detectors import ObjectDetector
 from argus_track.detectors.yolov11 import YOLOv11Detector
-from argus_track.stereo import StereoMatcher, StereoTriangulator, StereoCalibrationManager
 
 
 __all__ = [
@@ -44,8 +43,5 @@ __all__ = [
     "StereoTrack",
     "EnhancedLightPostTracker",
     "YOLOv11Detector",
-    "ObjectDetector",
-    "StereoMatcher",
-    "StereoTriangulator", 
-    "StereoCalibrationManager"
+    "ObjectDetector"
 ]

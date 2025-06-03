@@ -14,8 +14,8 @@ from ..core import GPSData
 @dataclass
 class StaticCarConfig:
     """Configuration for static car detection"""
-    movement_threshold_meters: float = 2.0      # Minimum movement to consider as "moving"
-    stationary_time_threshold: float = 10.0     # Seconds before considering stationary
+    movement_threshold_meters: float = 1.0      # Minimum movement to consider as "moving"
+    stationary_time_threshold: float = 6.0     # Seconds before considering stationary
     gps_frame_interval: int = 6                 # Normal GPS frame processing interval
 
 

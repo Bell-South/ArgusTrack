@@ -15,8 +15,7 @@ from ..core import Detection, Track, GPSData
 from ultralytics import YOLO
 from ..utils.static_car_detector import StaticCarDetector, StaticCarConfig
 from ..utils.visualization import draw_tracks, RealTimeVisualizer
-from ..utils.io import save_tracking_results, load_gps_data
-from ..utils.gps_utils import compute_average_location, GeoLocation
+from ..utils.gps_utils import GeoLocation
 from ..utils.gps_sync_tracker import GPSSynchronizer
 from ..utils.overlap_fixer import OverlapFixer
 
@@ -89,10 +88,9 @@ class EnhancedLightPostTracker:
 
         self.static_car_detector = None
         if hasattr(config, 'enable_static_car_detection') and config.enable_static_car_detection:
-            from ..utils.static_car_detector import StaticCarDetector, StaticCarConfig
             static_config = StaticCarConfig(
-                movement_threshold_meters=getattr(config, 'static_movement_threshold_m', 2.0),
-                stationary_time_threshold=getattr(config, 'static_time_threshold_s', 10.0),
+                movement_threshold_meters=getattr(config, 'static_movement_threshold_m', 1.0),
+                stationary_time_threshold=getattr(config, 'static_time_threshold_s', 5.0),
                 gps_frame_interval=6
             )
             self.static_car_detector = StaticCarDetector(static_config)
