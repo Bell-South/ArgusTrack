@@ -7,9 +7,7 @@ from .io import save_tracking_results, load_gps_data, setup_logging
 from .gps_utils import GPSInterpolator, CoordinateTransformer
 from .overlap_fixer import OverlapFixer
 from .output_manager import OutputManager, FrameData
-from .smart_track_manager import SmartTrackManager, TrackMemory
-from .visual_feature_extractor import VisualFeatures, VisualFeatureExtractor
-from .motion_prediction import MotionPredictor, PredictedPosition, CameraMotion, EnhancedTrackMatcher
+from .smart_track_manager import CleanTrackManager, TrackMemory
 
 __all__ = [
     "calculate_iou",
@@ -23,15 +21,9 @@ __all__ = [
     "StaticCarDetector",
     "OutputManager",
     "FrameData",
-    "SmartTrackManager",
+    "CleanTrackManager",
     "TrackMemory",
     "create_static_car_detector",
     "OverlapFixer",
-    "CoordinateTransformer",
-    "VisualFeatures", 
-    "VisualFeatureExtractor",
-    "MotionPredictor", 
-    "PredictedPosition", 
-    "CameraMotion",
-    "EnhancedTrackMatcher"
+    "CoordinateTransformer"
 ]
