@@ -69,6 +69,257 @@ class RealTimeVisualizer:
         self.logger.info(f"🖥️  Real-time visualization window opened: {window_name}")
         self.logger.info("   Press 'q' to quit, 'p' to pause, 's' to save screenshot")
 
+    def _add_info_panel(self, frame: np.ndarray,
+                    detections: List[Detection],
+                    tracks: List[Track],
+                    gps_data: Optional[Dict] = None,
+                    frame_info: Optional[Dict] = None) -> np.ndarray:
+        """Enhanced information panel with motion prediction and visual feature info"""
+        
+        if frame is None or not isinstance(frame, np.ndarray) or len(frame.shape) != 3:
+            return self.blank_frame.copy()
+        
+        try:
+            # Create larger panel for enhanced info
+            panel_height = 200  # Increased height
+            panel_width = 400   # Increased width
+            
+            # Create semi-transparent overlay
+            overlay = frame.copy()
+            cv2.rectangle(overlay, 
+                        (frame.shape[1] - panel_width - 10, 10),
+                        (frame.shape[1] - 10, panel_height + 10), 
+                        (0, 0, 0), -1)
+            
+            # Blend with original frame
+            result = cv2.addWeighted(frame, 0.7, overlay, 0.3, 0)
+            
+            # Safety checks
+            if detections is None:
+                detections = []
+            if tracks is None:
+                tracks = []
+            if frame_info is None:
+                frame_info = {}
+            
+            # Enhanced info lines
+            y_offset = 35
+            text_color = (255, 255, 255)
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.5
+            small_font_scale = 0.4
+            
+            # === BASIC INFO ===
+            info_lines = [
+                f"Frame: {frame_info.get('frame_idx', self.frame_count)}",
+                f"Detections: {len(detections)}",
+                f"Active Tracks: {len([t for t in tracks if getattr(t, 'state', None) in ['tentative', 'confirmed']])}",
+            ]
+            
+            # === MOTION PREDICTION INFO ===
+            if frame_info.get('motion_prediction_enabled', False):
+                motion_detected = "YES" if frame_info.get('camera_motion_detected', False) else "NO"
+                pred_accuracy = frame_info.get('avg_prediction_accuracy', 0)
+                info_lines.extend([
+                    f"Motion Pred: {motion_detected} ({pred_accuracy:.2f})",
+                ])
+            
+            # === VISUAL FEATURES INFO ===
+            if frame_info.get('visual_features_enabled', False):
+                tracks_with_features = frame_info.get('tracks_with_features', 0)
+                appearance_stability = frame_info.get('avg_appearance_stability', 0)
+                info_lines.extend([
+                    f"Visual Features: {tracks_with_features} tracks",
+                    f"Appearance Stability: {appearance_stability:.2f}",
+                ])
+            
+            # === DETECTION TYPE BREAKDOWN ===
+            motion_compensated = len([d for d in detections if getattr(d, 'motion_compensated', False)])
+            prediction_matches = len([d for d in detections if getattr(d, 'prediction_match', False)])
+            reappearances = len([d for d in detections if getattr(d, 'reappearance_match', False)])
+            
+            if motion_compensated > 0 or prediction_matches > 0 or reappearances > 0:
+                info_lines.append(f"Enhanced: MC:{motion_compensated} P:{prediction_matches} R:{reappearances}")
+            
+            # === GPS INFO ===
+            if gps_data:
+                speed_ms = gps_data.get('vehicle_speed_ms', 0)
+                speed_kmh = gps_data.get('vehicle_speed_kmh', 0)
+                info_lines.extend([
+                    f"GPS: {gps_data.get('latitude', 0):.5f}",
+                    f"     {gps_data.get('longitude', 0):.5f}",
+                    f"Speed: {speed_kmh:.1f} km/h",
+                    f"Heading: {gps_data.get('heading', 0):.1f}°"
+                ])
+            
+            # === TRACK CONSOLIDATION INFO ===
+            consolidations = frame_info.get('track_consolidations', 0)
+            reappearances_total = frame_info.get('track_reappearances', 0)
+            if consolidations > 0 or reappearances_total > 0:
+                info_lines.append(f"Consolidations: {consolidations}")
+                info_lines.append(f"Reappearances: {reappearances_total}")
+            
+            # === PERFORMANCE INFO ===
+            processed_frames = frame_info.get('processed_frames', 0)
+            total_frames = frame_info.get('total_frames', 1)
+            efficiency = (processed_frames / total_frames * 100) if total_frames > 0 else 0
+            info_lines.append(f"Efficiency: {efficiency:.1f}%")
+            
+            # Render text lines
+            for i, line in enumerate(info_lines):
+                y_pos = y_offset + i * 18
+                
+                # Use smaller font for detailed info
+                current_font_scale = small_font_scale if i > 6 else font_scale
+                
+                # Color coding for different types of info
+                if "Motion Pred:" in line:
+                    color = (0, 255, 255)  # Cyan for motion
+                elif "Visual Features:" in line:
+                    color = (255, 0, 255)  # Magenta for visual
+                elif "Enhanced:" in line:
+                    color = (0, 255, 0)    # Green for enhanced detections
+                elif "GPS:" in line or "Speed:" in line:
+                    color = (255, 255, 0)  # Yellow for GPS
+                elif "Consolidations:" in line or "Reappearances:" in line:
+                    color = (255, 165, 0)  # Orange for consolidation
+                else:
+                    color = text_color      # White for basic info
+                
+                cv2.putText(result, line, 
+                        (frame.shape[1] - panel_width + 5, y_pos),
+                        font, current_font_scale, color, 1)
+            
+            # === DETECTION QUALITY INDICATORS ===
+            # Show quality indicators at the bottom of panel
+            if detections:
+                best_detection = max(detections, key=lambda d: getattr(d, 'score', 0))
+                best_score = getattr(best_detection, 'score', 0)
+                
+                # Show best detection score with color coding
+                score_color = (0, 255, 0) if best_score > 0.7 else (0, 255, 255) if best_score > 0.5 else (0, 0, 255)
+                cv2.putText(result, f"Best: {best_score:.3f}", 
+                        (frame.shape[1] - panel_width + 5, panel_height - 10),
+                        font, font_scale, score_color, 2)
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Error adding enhanced info panel: {e}")
+            return frame
+
+    def _draw_tracks(self, frame: np.ndarray, tracks: List[Track],
+                            scale_x: float, scale_y: float) -> np.ndarray:
+        """Enhanced track drawing with motion and visual feature indicators"""
+        
+        if frame is None or len(frame.shape) != 3:
+            return self.blank_frame.copy()
+        
+        if tracks is None:
+            tracks = []
+            
+        try:
+            result = frame.copy()
+            for track in tracks:
+                # Determine track color based on enhanced attributes
+                if getattr(track, 'motion_compensated', False):
+                    color = (0, 255, 255)  # Cyan for motion compensated
+                elif getattr(track, 'prediction_match', False):
+                    color = (255, 0, 255)  # Magenta for prediction match
+                elif getattr(track, 'reappearance_match', False):
+                    color = (0, 165, 255)  # Orange for reappearance
+                else:
+                    # Use standard colors based on state
+                    color = TRACK_COLORS.get(getattr(track, 'state', 'confirmed'), (255, 255, 255))
+                
+                # Get bounding box
+                bbox = track.to_tlbr()
+                x1, y1, x2, y2 = bbox
+                x1, x2 = int(x1 * scale_x), int(x2 * scale_x)
+                y1, y2 = int(y1 * scale_y), int(y2 * scale_y)
+                
+                # Draw bounding box with enhanced thickness for special tracks
+                thickness = 4 if getattr(track, 'motion_compensated', False) else 3 if track.state == 'confirmed' else 2
+                cv2.rectangle(result, (x1, y1), (x2, y2), color, thickness)
+                
+                # Enhanced track info
+                track_info_parts = [f"ID:{track.track_id}"]
+                
+                if hasattr(track, 'hits'):
+                    track_info_parts.append(f"H:{track.hits}")
+                
+                # Add enhancement indicators
+                if getattr(track, 'motion_compensated', False):
+                    track_info_parts.append("MC")
+                if getattr(track, 'prediction_match', False):
+                    match_score = getattr(track, 'match_score', 0)
+                    track_info_parts.append(f"P:{match_score:.2f}")
+                if getattr(track, 'reappearance_match', False):
+                    track_info_parts.append("R")
+                
+                if track.state == 'confirmed':
+                    track_info_parts.append("✓")
+                
+                track_info = " ".join(track_info_parts)
+                
+                # Create enhanced text background
+                text_size = cv2.getTextSize(track_info, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+                bg_color = color
+                cv2.rectangle(result, (x1, y1 - text_size[1] - 8),
+                            (x1 + text_size[0] + 4, y1), bg_color, -1)
+                
+                # Draw text with contrasting color
+                text_color = (0, 0, 0) if sum(color) > 400 else (255, 255, 255)
+                cv2.putText(result, track_info, (x1 + 2, y1 - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 2)
+                
+                # Draw enhanced trajectory for confirmed tracks
+                if (track.state == 'confirmed' and 
+                    len(getattr(track, 'detections', [])) > 1 and
+                    hasattr(track, 'detections')):
+                    self._draw_trajectory_enhanced(result, track, scale_x, scale_y, color)
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Error drawing enhanced tracks: {e}")
+            return frame
+
+    def _draw_trajectory(self, frame: np.ndarray, track: Track,
+                                scale_x: float, scale_y: float, color: Tuple[int, int, int]):
+        """Draw enhanced trajectory with motion prediction indicators"""
+        try:
+            recent_detections = track.detections[-min(10, len(track.detections)):]
+            
+            if len(recent_detections) < 2:
+                return
+            
+            points = []
+            for detection in recent_detections:
+                center = detection.center
+                scaled_center = (int(center[0] * scale_x), int(center[1] * scale_y))
+                points.append(scaled_center)
+            
+            # Draw trajectory lines with varying thickness
+            for i in range(1, len(points)):
+                # Thicker line for more recent trajectory
+                thickness = max(1, 3 - i//3)
+                cv2.line(frame, points[i-1], points[i], color, thickness)
+            
+            # Draw trajectory points with size indicating recency
+            for i, point in enumerate(points):
+                radius = 4 if i == len(points) - 1 else max(2, 3 - i//3)
+                cv2.circle(frame, point, radius, color, -1)
+                
+                # Add prediction indicator for the latest point
+                if (i == len(points) - 1 and 
+                    getattr(track, 'prediction_match', False)):
+                    # Draw prediction indicator
+                    cv2.circle(frame, point, radius + 3, (255, 255, 255), 1)
+                    
+        except Exception as e:
+            self.logger.error(f"Error drawing enhanced trajectory: {e}")
+
     def visualize_frame(self, frame: np.ndarray, 
                     detections: List[Detection],
                     tracks: List[Track],
@@ -226,160 +477,6 @@ class RealTimeVisualizer:
             self.logger.error(f"Error drawing detections: {e}")
             return frame  # Return original frame if drawing fails
 
-    def _draw_tracks(self, frame: np.ndarray, tracks: List[Track],
-                    scale_x: float, scale_y: float) -> np.ndarray:
-        """Draw tracks with trajectories"""
-        if frame is None or len(frame.shape) != 3:
-            return self.blank_frame.copy()
-        
-        # Safety check - if frame is valid but tracks is None
-        if tracks is None:
-            tracks = []
-            
-        try:
-            result = frame.copy()
-            for track in tracks:
-                # Get track color based on state
-                color = TRACK_COLORS.get(track.state, (255, 255, 255))
-                
-                # Get bounding box
-                bbox = track.to_tlbr()
-                x1, y1, x2, y2 = bbox
-                x1, x2 = int(x1 * scale_x), int(x2 * scale_x)
-                y1, y2 = int(y1 * scale_y), int(y2 * scale_y)
-                
-                # Draw bounding box with thickness based on state
-                thickness = 3 if track.state == 'confirmed' else 2
-                cv2.rectangle(result, (x1, y1), (x2, y2), color, thickness)
-                
-                # Draw track info
-                track_info = f"ID:{track.track_id} H:{track.hits}"
-                if track.state == 'confirmed':
-                    track_info += " ✓"
-                    
-                # Create text background
-                text_size = cv2.getTextSize(track_info, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-                cv2.rectangle(result, (x1, y1 - text_size[1] - 8),
-                            (x1 + text_size[0] + 4, y1), color, -1)
-                
-                # Draw text
-                cv2.putText(result, track_info, (x1 + 2, y1 - 4),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-                
-                # Draw trajectory for confirmed tracks
-                if track.state == 'confirmed' and len(track.detections) > 1:
-                    self._draw_trajectory(result, track, scale_x, scale_y, color)
-            
-            return result
-        except Exception as e:
-            self.logger.error(f"Error drawing tracks: {e}")
-            return frame  # Return original frame if drawing fails
-
-    def _draw_trajectory(self, frame: np.ndarray, track: Track,
-                        scale_x: float, scale_y: float, color: Tuple[int, int, int]):
-        """Draw track trajectory"""
-        try:
-            # Get recent detection centers
-            recent_detections = track.detections[-min(10, len(track.detections)):]
-            
-            if len(recent_detections) < 2:
-                return
-            
-            points = []
-            for detection in recent_detections:
-                center = detection.center
-                scaled_center = (int(center[0] * scale_x), int(center[1] * scale_y))
-                points.append(scaled_center)
-            
-            # Draw trajectory lines
-            for i in range(1, len(points)):
-                cv2.line(frame, points[i-1], points[i], color, 2)
-            
-            # Draw trajectory points
-            for i, point in enumerate(points):
-                radius = 3 if i == len(points) - 1 else 2  # Larger for current position
-                cv2.circle(frame, point, radius, color, -1)
-        except Exception as e:
-            self.logger.error(f"Error drawing trajectory: {e}")
-
-    def _add_info_panel(self, frame: np.ndarray,
-                      detections: List[Detection],
-                      tracks: List[Track],
-                      gps_data: Optional[Dict] = None,
-                      frame_info: Optional[Dict] = None) -> np.ndarray:
-        """Add information panel overlay to visualization"""
-        # Safety check for frame
-        if frame is None or not isinstance(frame, np.ndarray) or len(frame.shape) != 3:
-            return self.blank_frame.copy()
-        
-        try:
-            # Create panel dimensions
-            panel_height = 140
-            panel_width = 320
-            
-            # Create semi-transparent overlay
-            overlay = frame.copy()
-            cv2.rectangle(overlay, 
-                         (frame.shape[1] - panel_width - 10, 10),
-                         (frame.shape[1] - 10, panel_height + 10), 
-                         (0, 0, 0), -1)
-            
-            # Blend with original frame
-            result = cv2.addWeighted(frame, 0.7, overlay, 0.3, 0)
-            
-            # Safety checks for parameters
-            if detections is None:
-                detections = []
-            if tracks is None:
-                tracks = []
-            
-            # Add text information
-            y_offset = 35
-            text_color = (255, 255, 255)
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.5
-            
-            # Count active and confirmed tracks
-            active_tracks = [t for t in tracks if getattr(t, 'state', None) in ['tentative', 'confirmed']]
-            confirmed_tracks = [t for t in tracks if getattr(t, 'state', None) == 'confirmed']
-            
-            # Prepare info lines
-            info_lines = [
-                f"Frame: {frame_info.get('frame_idx', self.frame_count) if frame_info else self.frame_count}",
-                f"Detections: {len(detections)}",
-                f"Active Tracks: {len(active_tracks)}",
-                f"Confirmed: {len(confirmed_tracks)}",
-            ]
-            
-            # Add best detection score if available
-            if detections:
-                try:
-                    best_detection = max(detections, key=lambda d: getattr(d, 'score', 0))
-                    info_lines.append(f"Best score: {getattr(best_detection, 'score', 0):.3f}")
-                except:
-                    pass
-            
-            # Add GPS info if available
-            if gps_data:
-                info_lines.append(f"GPS: {gps_data.get('latitude', 0):.5f}")
-                info_lines.append(f"     {gps_data.get('longitude', 0):.5f}")
-            
-            # Add frame skipping info if available
-            if frame_info and 'skipped_frames' in frame_info:
-                info_lines.append(f"Frames skipped: {frame_info.get('skipped_frames', 0)}")
-            
-            # Render text
-            for i, line in enumerate(info_lines):
-                y_pos = y_offset + i * 18
-                cv2.putText(result, line, 
-                           (frame.shape[1] - panel_width + 5, y_pos),
-                           font, font_scale, text_color, 1)
-            
-            return result
-        except Exception as e:
-            self.logger.error(f"Error adding info panel: {e}")
-            return frame  # Return original frame if info panel fails
-
     def close(self):
         """Close the visualization window"""
         try:
@@ -476,8 +573,6 @@ def draw_tracks(frame: np.ndarray, tracks: List[Track],
         logging.error(f"Error in draw_tracks: {e}")
         return frame
 
-
-# Additional utility function
 def create_track_overlay(frame: np.ndarray, tracks: List[Track],
                         alpha: float = 0.3) -> np.ndarray:
     """

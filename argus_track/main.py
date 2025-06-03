@@ -1,3 +1,5 @@
+# argus_track/main.py (UPDATED FOR SIMPLIFIED TRACKING)
+
 import argparse
 import logging
 from pathlib import Path
@@ -6,46 +8,61 @@ import time
 import numpy as np
 
 from argus_track.config import TrackerConfig
-from argus_track import (
-    YOLOv11Detector,
-    __version__
-)
-from argus_track.trackers.lightpost_tracker import EnhancedLightPostTracker
-from argus_track.utils import setup_logging, load_gps_data
+from argus_track import __version__
+from argus_track.trackers.simplified_lightpost_tracker import SimplifiedLightPostTracker
+from argus_track.utils import setup_logging
+
 
 def main():
-    """Fixed main function with GPS extraction"""
+    """Main function for simplified tracking with ID consolidation"""
     parser = argparse.ArgumentParser(
-        description=f"Argus Track: Light Post Tracking System v{__version__}",
+        description=f"Argus Track: Simplified Light Post Tracking System v{__version__}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-            Examples:
-                # Real-time visualization
-                python main.py input.mp4 --detector yolov11 --model model.pt --show-realtime
-                
-                # With GPS data
-                python main.py input.mp4 --detector yolov11 --model model.pt --gps gps.csv
-            """
+Examples:
+    # Basic tracking with automatic GPS extraction
+    python main.py input.mp4 --model model.pt --show-realtime
+    
+    # Batch processing without visualization
+    python main.py input.mp4 --model model.pt --no-realtime
+    
+    # Custom output paths
+    python main.py input.mp4 --model model.pt --json-output results.json --csv-output gps.csv
+        """
     )
     
     # Basic arguments
     parser.add_argument('input_video', type=str, help='Path to input video file')
-    parser.add_argument('--model', type=str, help='Path to detection model file')
-    parser.add_argument('--output', type=str, help='Path for output video')
-    parser.add_argument('--target-classes', nargs="*", default=None, 
-                        help="Target class names")
+    parser.add_argument('--model', type=str, required=True, help='Path to YOLO model file')
     
-    # GPS arguments (removed)
+    # Output arguments
+    parser.add_argument('--output-video', type=str, help='Path for output visualization video')
+    parser.add_argument('--json-output', type=str, help='Path for JSON output file')
+    parser.add_argument('--csv-output', type=str, help='Path for CSV output file')
     
-    # Visualization
-    parser.add_argument('--show-realtime', action='store_true',
-                       help='Show real-time visualization')
+    # Processing arguments
+    parser.add_argument('--show-realtime', action='store_true', default=True,
+                       help='Show real-time visualization (default: True)')
+    parser.add_argument('--no-realtime', action='store_true',
+                       help='Disable real-time visualization')
     
-    # Tracking parameters (optional overrides)
-    parser.add_argument('--track-thresh', type=float, default=None,
-                       help='Detection confidence threshold')
-    parser.add_argument('--match-thresh', type=float, default=None,
-                       help='IoU threshold for matching')
+    # Tracking parameters
+    parser.add_argument('--detection-conf', type=float, default=0.20,
+                       help='Detection confidence threshold (default: 0.20)')
+    parser.add_argument('--gps-interval', type=int, default=6,
+                       help='GPS frame interval (default: 6 - every 6th frame)')
+    
+    # Track consolidation parameters
+    parser.add_argument('--disable-consolidation', action='store_true',
+                       help='Disable track ID consolidation')
+    parser.add_argument('--disable-reappearance', action='store_true',
+                       help='Disable track reappearance detection')
+    parser.add_argument('--max-gap-frames', type=int, default=15,
+                       help='Max frames to remember lost tracks (default: 15)')
+    
+    # Static car detection
+    parser.add_argument('--disable-static-car', action='store_true',
+                       help='Disable static car detection')
     
     # Logging
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
@@ -59,25 +76,62 @@ def main():
         print(f"❌ Error: Input video not found: {args.input_video}")
         return 1
     
+    if not Path(args.model).exists():
+        print(f"❌ Error: Model file not found: {args.model}")
+        return 1
+    
+    # Handle real-time display settings
+    show_realtime = args.show_realtime and not args.no_realtime
+    
     # Setup logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
     setup_logging(log_file=args.log_file, level=log_level)
     logger = logging.getLogger(__name__)
     
-    logger.info(f"🚀 Argus Track v{__version__}")
+    logger.info(f"🚀 Argus Track v{__version__} - Simplified Tracking")
     logger.info(f"📹 Input video: {args.input_video}")
+    logger.info(f"🤖 Model: {args.model}")
+    logger.info(f"📺 Real-time display: {show_realtime}")
     
     try:
         # Create configuration
-        config = TrackerConfig.create_ultralytics_optimized()
-        logger.info("📷 Using standard configuration")
-
+        config = TrackerConfig.create_simplified_tracker()
+        
+        # Apply command line overrides
+        config.detection_conf = args.detection_conf
+        config.gps_frame_interval = args.gps_interval
+        
+        # Track consolidation settings
+        if args.disable_consolidation:
+            config.track_consolidation.enable_id_consolidation = False
+            logger.info("🔧 ID consolidation disabled")
+        
+        if args.disable_reappearance:
+            config.track_consolidation.enable_reappearance_detection = False
+            logger.info("🔧 Reappearance detection disabled")
+        
+        config.track_consolidation.max_gap_frames = args.max_gap_frames
+        
+        # Static car detection
+        if args.disable_static_car:
+            config.enable_static_car_detection = False
+            logger.info("🔧 Static car detection disabled")
+        
+        logger.info("📷 Configuration created")
+        logger.info(f"   Detection confidence: {config.detection_conf}")
+        logger.info(f"   GPS frame interval: {config.gps_frame_interval}")
+        logger.info(f"   ID consolidation: {config.track_consolidation.enable_id_consolidation}")
+        logger.info(f"   Reappearance detection: {config.track_consolidation.enable_reappearance_detection}")
+        logger.info(f"   Max gap frames: {config.track_consolidation.max_gap_frames}")
+        
+        # Extract GPS data from video
         logger.info("🗺️ Extracting GPS data from video metadata...")
         gps_data = None
         
         try:
             from argus_track.utils.gps_extraction import extract_gps_from_stereo_videos
             
+            # Use the same video file for both left and right (monocular)
             gps_data, extraction_method = extract_gps_from_stereo_videos(
                 args.input_video, args.input_video, method='auto'
             )
@@ -94,7 +148,7 @@ def main():
                     logger.info(f"⏱️ Time range: {start_gps.timestamp:.1f}s to {end_gps.timestamp:.1f}s")
             else:
                 logger.warning("⚠️ No GPS data found in video metadata")
-                logger.warning("   Make sure your GoPro video has GPS metadata")
+                logger.warning("   Processing will continue without GPS synchronization")
                 
         except ImportError as e:
             logger.error(f"❌ GPS extraction dependencies missing: {e}")
@@ -104,125 +158,122 @@ def main():
             logger.error(f"❌ GPS extraction failed: {e}")
             gps_data = None
         
-        # ===== END GPS EXTRACTION =====
-        
-        # Initialize tracker with YOLOv11 model path
-        tracker = EnhancedLightPostTracker(
+        # Initialize simplified tracker
+        tracker = SimplifiedLightPostTracker(
             config=config,
             model_path=args.model,
-            show_realtime=args.show_realtime,
+            show_realtime=show_realtime,
             display_size=(1280, 720)
         )
         
         # Show helpful tips
-        if args.show_realtime:
+        if show_realtime:
             logger.info("🖥️  Real-time visualization controls:")
             logger.info("   - Press 'q' to quit")
             logger.info("   - Press 'p' to pause/resume") 
             logger.info("   - Press 's' to save screenshot")
-
-        # Show GPS status before processing
+            logger.info("   - Only GPS-synchronized frames will be displayed")
+        
+        # Show processing info
         if gps_data:
-            logger.info(f"📍 GPS-enabled processing: {len(gps_data)} GPS points available")
-            logger.info("   → Objects will be geolocated using GPS + depth estimation")
+            effective_frames = len(gps_data)
+            logger.info(f"📍 GPS-synchronized processing: {effective_frames} frames to process")
+            logger.info("   → Frames will be processed at GPS frequency (every 6th frame)")
         else:
-            logger.warning("⚠️ GPS-disabled processing: No GPS data available")
-            logger.warning("   → Objects will be tracked but NOT geolocated")
-
-        # Process video with GPS data
+            logger.warning("⚠️ No GPS data: Processing all frames")
+        
+        # Process video
         start_time = time.time()
         
-        tracks = tracker.process_video(
+        results = tracker.process_video(
             video_path=args.input_video,
-            gps_data=gps_data,  # ← THIS IS THE KEY FIX!
-            output_path=args.output,
-            save_results=not args.no_save,
-            resolution_scale=1.0
+            gps_data=gps_data,
+            output_path=args.output_video,
+            save_results=not args.no_save
         )
         
         processing_time = time.time() - start_time
         
         # Print results
         logger.info("🎉 PROCESSING COMPLETE!")
-        logger.info(f"⏱️  Processing time: {processing_time:.1f} seconds")
+        logger.info(f"⏱️  Total processing time: {processing_time:.1f} seconds")
         
-        # Get statistics
-        if hasattr(tracker, 'get_enhanced_tracking_statistics'):
-            stats = tracker.get_enhanced_tracking_statistics()
-        else:
-            stats = tracker.get_track_statistics()
+        # Processing statistics
+        logger.info("📊 PROCESSING STATISTICS:")
+        logger.info(f"   Total frames in video: {results['total_frames']}")
+        logger.info(f"   Processed frames: {results['processed_frames']}")
+        logger.info(f"   Skipped (GPS sync): {results['skipped_frames_gps']}")
+        logger.info(f"   Skipped (static car): {results['skipped_frames_static']}")
+        logger.info(f"   Processing efficiency: {results['avg_fps']:.1f} FPS")
         
-        logger.info("📊 TRACKING STATISTICS:")
-        for key, value in stats.items():
-            if isinstance(value, float):
-                logger.info(f"   {key}: {value:.3f}")
-            else:
-                logger.info(f"   {key}: {value}")
+        # Track consolidation statistics
+        track_stats = results['track_manager_stats']
+        logger.info("🔧 TRACK CONSOLIDATION STATISTICS:")
+        logger.info(f"   Active tracks: {track_stats['active_tracks']}")
+        logger.info(f"   Total consolidations: {track_stats['total_consolidations']}")
+        logger.info(f"   Total reappearances: {track_stats['total_reappearances']}")
+
+        # Only log if the key exists
+        if 'tracks_created' in track_stats:
+            logger.info(f"   Tracks created: {track_stats['tracks_created']}")
+        elif 'total_tracks_created' in track_stats:
+            logger.info(f"   Total tracks created: {track_stats['total_tracks_created']}")
         
-        # Check for geolocated objects
-        if hasattr(tracker, 'track_locations') and tracker.track_locations:
-            logger.info("📍 GEOLOCATED OBJECTS:")
-            for track_id, location in tracker.track_locations.items():
-                logger.info(
-                    f"   Track {track_id}: ({location.latitude:.6f}, {location.longitude:.6f}) "
-                    f"accuracy: {location.accuracy:.1f}m, reliability: {location.reliability:.2f}"
-                )
+        # Output statistics
+        output_stats = results['output_summary']
+        logger.info("📄 OUTPUT STATISTICS:")
+        logger.info(f"   Unique tracks: {output_stats['unique_tracks']}")
+        logger.info(f"   Total detections: {output_stats['total_detections']}")
+        logger.info(f"   Avg detections/frame: {output_stats['avg_detections_per_frame']:.1f}")
+        logger.info(f"   Frames with GPS: {output_stats['frames_with_gps']}")
         
-        # Check for GPS-based locations (NEW)
-        elif hasattr(tracker, 'track_gps_locations') and tracker.track_gps_locations:
-            logger.info("📍 GPS-BASED OBJECT LOCATIONS:")
-            total_locations = 0
-            for track_id, locations in tracker.track_gps_locations.items():
-                if len(locations) >= 3:  # Only show tracks with multiple detections
-                    avg_lat = sum(loc['latitude'] for loc in locations) / len(locations)
-                    avg_lon = sum(loc['longitude'] for loc in locations) / len(locations)
-                    avg_depth = sum(loc['depth'] for loc in locations) / len(locations)
-                    confidence = sum(loc['confidence'] for loc in locations) / len(locations)
-                    
-                    logger.info(
-                        f"   Track {track_id}: ({avg_lat:.6f}, {avg_lon:.6f}) "
-                        f"depth: {avg_depth:.1f}m, confidence: {confidence:.2f}, "
-                        f"detections: {len(locations)}"
-                    )
-                    total_locations += 1
+        # Class distribution
+        if output_stats['class_distribution']:
+            logger.info("🏷️  CLASS DISTRIBUTION:")
+            for class_name, count in output_stats['class_distribution'].items():
+                logger.info(f"   {class_name}: {count} detections")
+        
+        # Output files
+        if not args.no_save:
+            logger.info("📁 OUTPUT FILES:")
             
-            if total_locations > 0:
-                logger.info(f"🎯 SUCCESS: {total_locations} objects with GPS coordinates!")
-            else:
-                logger.info("📍 No objects with sufficient GPS tracking")
-        else:
-            logger.info("📍 No static objects found for geolocation")
-            if not gps_data:
-                logger.info("   💡 Tip: Provide GPS data to enable geolocation")
+            if 'json_output' in results:
+                json_path = results['json_output']
+                if Path(json_path).exists():
+                    file_size = Path(json_path).stat().st_size / (1024 * 1024)
+                    logger.info(f"   📄 JSON data: {json_path} ({file_size:.1f} MB)")
+                    
+                    # Custom JSON output path
+                    if args.json_output:
+                        custom_path = Path(args.json_output)
+                        Path(json_path).rename(custom_path)
+                        logger.info(f"   📄 Moved to: {custom_path}")
+            
+            if 'csv_output' in results:
+                csv_path = results['csv_output']
+                if Path(csv_path).exists():
+                    file_size = Path(csv_path).stat().st_size / 1024
+                    logger.info(f"   📍 GPS CSV: {csv_path} ({file_size:.1f} KB)")
+                    
+                    # Custom CSV output path
+                    if args.csv_output:
+                        custom_path = Path(args.csv_output)
+                        Path(csv_path).rename(custom_path)
+                        logger.info(f"   📍 Moved to: {custom_path}")
+            
+            if args.output_video and Path(args.output_video).exists():
+                file_size = Path(args.output_video).stat().st_size / (1024 * 1024)
+                logger.info(f"   🎬 Visualization video: {args.output_video} ({file_size:.1f} MB)")
         
-        # Output file summary
-        video_stem = Path(args.input_video).stem
-        logger.info("📁 OUTPUT FILES:")
+        # Success summary
+        logger.info("🏁 SUCCESS SUMMARY:")
+        logger.info(f"   ✅ {results['processed_frames']} frames processed")
+        logger.info(f"   ✅ {track_stats['total_consolidations']} ID consolidations applied")
+        logger.info(f"   ✅ {track_stats['total_reappearances']} track reappearances handled")
+        logger.info(f"   ✅ {output_stats['unique_tracks']} unique objects tracked")
         
-        output_files = [
-            (f"{video_stem}.json", "Tracking results"),
-            (f"{video_stem}.geojson", "Geolocation data"),
-            (f"{video_stem}.csv", "GPS data"),
-        ]
-        
-        if args.output:
-            output_files.append((args.output, "Visualization video"))
-        
-        for filename, description in output_files:
-            if Path(filename).exists():
-                file_size = Path(filename).stat().st_size / (1024 * 1024)
-                logger.info(f"   📄 {description}: {filename} ({file_size:.1f} MB)")
-        
-        # Final success message
-        total_tracks = len(tracks) if tracks else 0
-        geolocated_count = len(tracker.track_locations) if hasattr(tracker, 'track_locations') else 0
-        
-        # Also check GPS-based locations
-        if hasattr(tracker, 'track_gps_locations'):
-            gps_based_count = len([t for t, locs in tracker.track_gps_locations.items() if len(locs) >= 3])
-            geolocated_count = max(geolocated_count, gps_based_count)
-        
-        logger.info(f"🏁 SUCCESS: {total_tracks} tracks processed, {geolocated_count} objects geolocated")
+        if gps_data:
+            logger.info(f"   ✅ GPS data synchronized for {output_stats['frames_with_gps']} frames")
         
         return 0
         
