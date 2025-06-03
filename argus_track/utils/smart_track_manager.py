@@ -59,9 +59,9 @@ class CleanTrackManager:
     4. Simple, predictable behavior
     """
     # Temporal resurrection constants
-    MIN_DISTANCE_DIFFERENT_OBJECT_M = 15.0      # Vehicle travel distance to consider new object
+    MIN_DISTANCE_DIFFERENT_OBJECT_M = 12.0      # Vehicle travel distance to consider new object(15)
     FORBID_DISTANCE_THRESHOLD_M = 20.0          # Distance to proactively forbid resurrections
-    MAX_TIME_SAME_OBJECT_S = 3.0                # Max time for same object resurrection
+    MAX_TIME_SAME_OBJECT_S = 2.5                # Max time for same object resurrection(3)
     FAST_SPEED_THRESHOLD_MS = 5.0               # Speed threshold for restrictive policy
     STATIONARY_THRESHOLD_MS = 0.5               # Speed threshold for lenient policy
     MAX_FRAMES_FAST_MOVING = 3                  # Max frames gap at high speed

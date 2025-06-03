@@ -82,7 +82,6 @@ argus_track/
 .gitignore
 .repomixignore
 LICENSE
-logs.txt
 README.md
 repomix.config.json
 setup.py
@@ -90,6 +89,167 @@ setup.py
 ================================================================
 Files
 ================================================================
+
+================
+File: argus_track/core/__init__.py
+================
+"""Core data structures for ByteTrack Light Post Tracking System"""
+
+from .detection import Detection
+from .track import Track
+from .gps import GPSData
+
+__all__ = ["Detection", "Track", "GPSData"]
+
+================
+File: argus_track/core/detection.py
+================
+"""Detection data structure"""
+
+from dataclasses import dataclass
+import numpy as np
+
+
+@dataclass
+class Detection:
+    """Single object detection"""
+    bbox: np.ndarray                   # [x1, y1, x2, y2] format
+    score: float                       # Confidence score [0, 1]
+    class_id: int                      # Object class ID
+    frame_id: int                      # Frame number
+    
+    @property
+    def tlbr(self) -> np.ndarray:
+        """Get bounding box in top-left, bottom-right format"""
+        return self.bbox
+    
+    @property
+    def xywh(self) -> np.ndarray:
+        """Get bounding box in center-x, center-y, width, height format"""
+        x1, y1, x2, y2 = self.bbox
+        return np.array([
+            (x1 + x2) / 2,  # center x
+            (y1 + y2) / 2,  # center y
+            x2 - x1,        # width
+            y2 - y1         # height
+        ])
+    
+    @property
+    def area(self) -> float:
+        """Calculate bounding box area"""
+        x1, y1, x2, y2 = self.bbox
+        return (x2 - x1) * (y2 - y1)
+    
+    @property
+    def center(self) -> np.ndarray:
+        """Get center point of bounding box"""
+        x1, y1, x2, y2 = self.bbox
+        return np.array([(x1 + x2) / 2, (y1 + y2) / 2])
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary representation"""
+        return {
+            'bbox': self.bbox.tolist(),
+            'score': self.score,
+            'class_id': self.class_id,
+            'frame_id': self.frame_id
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Detection':
+        """Create from dictionary representation"""
+        return cls(
+            bbox=np.array(data['bbox']),
+            score=data['score'],
+            class_id=data['class_id'],
+            frame_id=data['frame_id']
+        )
+
+================
+File: argus_track/core/gps.py
+================
+"""GPS data structure"""
+
+from dataclasses import dataclass
+from typing import Dict, Any
+
+
+@dataclass
+class GPSData:
+    """GPS data for a single frame"""
+    timestamp: float
+    latitude: float
+    longitude: float
+    altitude: float
+    heading: float
+    accuracy: float = 1.0              # GPS accuracy in meters
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation"""
+        return {
+            'timestamp': self.timestamp,
+            'latitude': self.latitude,
+            'longitude': self.longitude,
+            'altitude': self.altitude,
+            'heading': self.heading,
+            'accuracy': self.accuracy
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'GPSData':
+        """Create from dictionary representation"""
+        return cls(**data)
+    
+    @classmethod
+    def from_csv_line(cls, line: str) -> 'GPSData':
+        """Create from CSV line"""
+        parts = line.strip().split(',')
+        if len(parts) < 5:
+            raise ValueError(f"Invalid GPS data line: {line}")
+        
+        return cls(
+            timestamp=float(parts[0]),
+            latitude=float(parts[1]),
+            longitude=float(parts[2]),
+            altitude=float(parts[3]),
+            heading=float(parts[4]),
+            accuracy=float(parts[5]) if len(parts) > 5 else 1.0
+        )
+
+================
+File: argus_track/detectors/base.py
+================
+"""Base detector interface"""
+
+from abc import ABC, abstractmethod
+from typing import List, Dict, Any
+import numpy as np
+
+
+class ObjectDetector(ABC):
+    """Abstract base class for object detection modules"""
+    
+    @abstractmethod
+    def detect(self, frame: np.ndarray) -> List[Dict[str, Any]]:
+        """
+        Detect objects in a frame
+        
+        Args:
+            frame: Input image as numpy array
+            
+        Returns:
+            List of detections with keys: bbox, score, class_name, class_id
+        """
+        pass
+    
+    @abstractmethod
+    def get_class_names(self) -> List[str]:
+        """Get list of detectable class names"""
+        pass
+    
+    def set_target_classes(self, target_classes: List[str]) -> None:
+        """Set specific classes to detect"""
+        self.target_classes = target_classes
 
 ================
 File: argus_track/utils/gps_motion_prediction.py
@@ -133,7 +293,7 @@ class MotionPredictionConfig:
     gps_smoothing_window: int = 3               # Moving average window for GPS smoothing
     min_gps_accuracy_m: float = 3.0             # Use prediction when GPS accuracy < 3m
     max_gps_accuracy_m: float = 5.0             # Fallback to existing logic when > 5m
-    min_movement_threshold_m: float = 0.1       # Ignore GPS movements smaller than 10cm
+    min_movement_threshold_m: float = 0.001       # Ignore GPS movements smaller than 10cm
     
     # === CAMERA PARAMETERS (GoPro Hero 11 Wide) ===
     horizontal_fov_degrees: float = 122.0       # Horizontal field of view
@@ -653,733 +813,6 @@ def create_motion_prediction_config(object_distance_m: float = 30.0,
         enable_debug_logging=enable_debug,
         enable_prediction_visualization=enable_debug
     )
-
-================
-File: logs.txt
-================
-2025-06-03 14:30:21,103 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - Track 3 lost at frame 1246
-2025-06-03 14:30:21,151 - argus_track.utils.static_car_detector.StaticCarDetector - INFO - Frame 1252: Car stationary for 3.0s - starting to skip frames for efficiency
-2025-06-03 14:30:21,212 - argus_track.utils.static_car_detector.StaticCarDetector - DEBUG - Movement detected: 0.8m
-2025-06-03 14:30:21,212 - argus_track.utils.static_car_detector.StaticCarDetector - INFO - Frame 1264: Movement resumed after 0.2s stationary period
-2025-06-03 14:30:21,212 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - GPS context updated: prev_time=1727909099.0, curr_time=1727909099.299
-2025-06-03 14:30:21,721 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - GPS context updated: prev_time=1727909099.299, curr_time=1727909099.399
-2025-06-03 14:30:22,219 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - GPS context updated: prev_time=1727909099.399, curr_time=1727909099.499
-2025-06-03 14:30:22,717 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - GPS context updated: prev_time=1727909099.499, curr_time=1727909099.599
-2025-06-03 14:30:23,221 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - GPS context updated: prev_time=1727909099.599, curr_time=1727909099.699
-2025-06-03 14:30:23,726 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - GPS context updated: prev_time=1727909099.699, curr_time=1727909099.799
-2025-06-03 14:30:24,185 - argus_track.utils.overlap_fixer.OverlapFixer - INFO - New stable ID: 28 -> 4
-2025-06-03 14:30:24,185 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - Frame 1294: No active track positions
-2025-06-03 14:30:24,233 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - GPS context updated: prev_time=1727909099.799, curr_time=1727909099.899
-2025-06-03 14:30:24,697 - argus_track.utils.overlap_fixer.OverlapFixer - INFO - Reusing known mapping: 28 -> 4
-2025-06-03 14:30:24,697 - argus_track.utils.gps_motion_prediction.GPSMotionCalculator - DEBUG - Vehicle movement: 0.86m, Speed: 30.9 km/h, Heading change: 0.0°
-2025-06-03 14:30:24,697 - argus_track.utils.gps_motion_prediction.ScreenDisplacementPredictor - DEBUG - Screen prediction: (-17.8, -18.5)px, confidence: 0.51
-2025-06-03 14:30:24,697 - argus_track.utils.gps_motion_prediction.MotionPredictor - DEBUG - Generated 1 position predictions with confidence 0.51
-2025-06-03 14:30:24,697 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - Frame 1300: Track 4 predicted at [       2114      596.34] (conf: 0.51)
-2025-06-03 14:30:24,697 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - Track 3 moved to forbidden resurrections (too old)
-2025-06-03 14:30:24,697 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - Track 4 lost at frame 1300
-2025-06-03 14:30:24,746 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - GPS context updated: prev_time=1727909099.899, curr_time=1727909100.0
-2025-06-03 14:30:25,203 - argus_track.utils.overlap_fixer.OverlapFixer - INFO - Reusing known mapping: 28 -> 4
-2025-06-03 14:30:25,203 - argus_track.utils.gps_motion_prediction.GPSMotionCalculator - DEBUG - Movement below threshold: 0.000m
-2025-06-03 14:30:25,203 - argus_track.utils.smart_track_manager.CleanTrackManager - INFO - Resurrection allowed: track 4 moved 76.0px within threshold 150.0px
-2025-06-03 14:30:25,203 - argus_track.utils.smart_track_manager.CleanTrackManager - INFO - Frame 1306: Allowed logical resurrection 4
-2025-06-03 14:30:25,203 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - Track 5 lost at frame 1306
-2025-06-03 14:30:25,251 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - GPS context updated: prev_time=1727909100.0, curr_time=1727909100.099
-2025-06-03 14:30:25,706 - argus_track.utils.overlap_fixer.OverlapFixer - INFO - Reusing known mapping: 28 -> 4
-2025-06-03 14:30:25,706 - argus_track.utils.gps_motion_prediction.GPSMotionCalculator - DEBUG - Movement below threshold: 0.000m
-2025-06-03 14:30:25,706 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - Track 4 lost at frame 1312
-2025-06-03 14:30:25,756 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - GPS context updated: prev_time=1727909100.099, curr_time=1727909100.199
-2025-06-03 14:30:26,217 - argus_track.utils.overlap_fixer.OverlapFixer - INFO - Reusing known mapping: 28 -> 4
-2025-06-03 14:30:26,217 - argus_track.utils.gps_motion_prediction.GPSMotionCalculator - DEBUG - Movement below threshold: 0.000m
-2025-06-03 14:30:26,217 - argus_track.utils.smart_track_manager.CleanTrackManager - INFO - Resurrection allowed: track 4 moved 66.7px within threshold 150.0px
-2025-06-03 14:30:26,217 - argus_track.utils.smart_track_manager.CleanTrackManager - INFO - Frame 1318: Allowed logical resurrection 4
-2025-06-03 14:30:26,217 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - Track 6 lost at frame 1318
-2025-06-03 14:30:26,265 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - GPS context updated: prev_time=1727909100.199, curr_time=1727909100.299
-2025-06-03 14:30:26,712 - argus_track.utils.overlap_fixer.OverlapFixer - INFO - Reusing known mapping: 28 -> 4
-2025-06-03 14:30:26,712 - argus_track.utils.gps_motion_prediction.GPSMotionCalculator - DEBUG - Movement below threshold: 0.000m
-2025-06-03 14:30:26,712 - argus_track.utils.smart_track_manager.CleanTrackManager - INFO - Frame 1324: Position-based match 4 -> 4 (distance: 29.2px)
-2025-06-03 14:30:26,760 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - GPS context updated: prev_time=1727909100.299, curr_time=1727909100.399
-2025-06-03 14:30:27,203 - argus_track.utils.overlap_fixer.OverlapFixer - INFO - Reusing known mapping: 28 -> 4
-2025-06-03 14:30:27,203 - argus_track.utils.gps_motion_prediction.GPSMotionCalculator - DEBUG - Movement below threshold: 0.000m
-2025-06-03 14:30:27,203 - argus_track.utils.smart_track_manager.CleanTrackManager - INFO - Frame 1330: Position-based match 4 -> 4 (distance: 29.9px)
-2025-06-03 14:30:27,252 - argus_track.utils.smart_track_manager.CleanTrackManager - DEBUG - GPS context updated: prev_time=1727909100.399, curr_time=1727909100.499
-^C2025-06-03 14:30:27,580 - argus_track.trackers.unique_tracker.UnifiedLightPostTracker - INFO - Processing interrupted by user
-
-================
-File: argus_track/core/__init__.py
-================
-"""Core data structures for ByteTrack Light Post Tracking System"""
-
-from .detection import Detection
-from .track import Track
-from .gps import GPSData
-
-__all__ = ["Detection", "Track", "GPSData"]
-
-================
-File: argus_track/core/detection.py
-================
-"""Detection data structure"""
-
-from dataclasses import dataclass
-import numpy as np
-
-
-@dataclass
-class Detection:
-    """Single object detection"""
-    bbox: np.ndarray                   # [x1, y1, x2, y2] format
-    score: float                       # Confidence score [0, 1]
-    class_id: int                      # Object class ID
-    frame_id: int                      # Frame number
-    
-    @property
-    def tlbr(self) -> np.ndarray:
-        """Get bounding box in top-left, bottom-right format"""
-        return self.bbox
-    
-    @property
-    def xywh(self) -> np.ndarray:
-        """Get bounding box in center-x, center-y, width, height format"""
-        x1, y1, x2, y2 = self.bbox
-        return np.array([
-            (x1 + x2) / 2,  # center x
-            (y1 + y2) / 2,  # center y
-            x2 - x1,        # width
-            y2 - y1         # height
-        ])
-    
-    @property
-    def area(self) -> float:
-        """Calculate bounding box area"""
-        x1, y1, x2, y2 = self.bbox
-        return (x2 - x1) * (y2 - y1)
-    
-    @property
-    def center(self) -> np.ndarray:
-        """Get center point of bounding box"""
-        x1, y1, x2, y2 = self.bbox
-        return np.array([(x1 + x2) / 2, (y1 + y2) / 2])
-    
-    def to_dict(self) -> dict:
-        """Convert to dictionary representation"""
-        return {
-            'bbox': self.bbox.tolist(),
-            'score': self.score,
-            'class_id': self.class_id,
-            'frame_id': self.frame_id
-        }
-    
-    @classmethod
-    def from_dict(cls, data: dict) -> 'Detection':
-        """Create from dictionary representation"""
-        return cls(
-            bbox=np.array(data['bbox']),
-            score=data['score'],
-            class_id=data['class_id'],
-            frame_id=data['frame_id']
-        )
-
-================
-File: argus_track/core/gps.py
-================
-"""GPS data structure"""
-
-from dataclasses import dataclass
-from typing import Dict, Any
-
-
-@dataclass
-class GPSData:
-    """GPS data for a single frame"""
-    timestamp: float
-    latitude: float
-    longitude: float
-    altitude: float
-    heading: float
-    accuracy: float = 1.0              # GPS accuracy in meters
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation"""
-        return {
-            'timestamp': self.timestamp,
-            'latitude': self.latitude,
-            'longitude': self.longitude,
-            'altitude': self.altitude,
-            'heading': self.heading,
-            'accuracy': self.accuracy
-        }
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'GPSData':
-        """Create from dictionary representation"""
-        return cls(**data)
-    
-    @classmethod
-    def from_csv_line(cls, line: str) -> 'GPSData':
-        """Create from CSV line"""
-        parts = line.strip().split(',')
-        if len(parts) < 5:
-            raise ValueError(f"Invalid GPS data line: {line}")
-        
-        return cls(
-            timestamp=float(parts[0]),
-            latitude=float(parts[1]),
-            longitude=float(parts[2]),
-            altitude=float(parts[3]),
-            heading=float(parts[4]),
-            accuracy=float(parts[5]) if len(parts) > 5 else 1.0
-        )
-
-================
-File: argus_track/detectors/base.py
-================
-"""Base detector interface"""
-
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any
-import numpy as np
-
-
-class ObjectDetector(ABC):
-    """Abstract base class for object detection modules"""
-    
-    @abstractmethod
-    def detect(self, frame: np.ndarray) -> List[Dict[str, Any]]:
-        """
-        Detect objects in a frame
-        
-        Args:
-            frame: Input image as numpy array
-            
-        Returns:
-            List of detections with keys: bbox, score, class_name, class_id
-        """
-        pass
-    
-    @abstractmethod
-    def get_class_names(self) -> List[str]:
-        """Get list of detectable class names"""
-        pass
-    
-    def set_target_classes(self, target_classes: List[str]) -> None:
-        """Set specific classes to detect"""
-        self.target_classes = target_classes
-
-================
-File: argus_track/trackers/unique_tracker.py
-================
-# argus_track/trackers/unified_lightpost_tracker.py
-
-"""
-Unified Light Post Tracker - Clean, GPS-informed tracking
-=========================================================
-
-Combines best features from both trackers with GPS movement context
-to solve track fragmentation and resurrection issues.
-"""
-
-import cv2
-import numpy as np
-import time
-import logging
-from pathlib import Path
-from typing import List, Dict, Optional, Any, Tuple
-
-from ultralytics import YOLO
-from ..config import TrackerConfig
-from ..core import Detection, GPSData
-from ..utils.smart_track_manager import CleanTrackManager
-from ..utils.output_manager import OutputManager
-from ..utils.gps_sync_tracker import GPSSynchronizer
-from ..utils.static_car_detector import StaticCarDetector, StaticCarConfig
-from ..utils.visualization import RealTimeVisualizer
-from ..utils.overlap_fixer import OverlapFixer
-
-
-class UnifiedLightPostTracker:
-    """
-    Unified Light Post Tracker with GPS movement context
-    
-    Clean, focused tracker that uses GPS to:
-    - Detect vehicle movement (skip stationary frames)
-    - Prevent impossible track resurrections (forward motion logic)
-    - Provide movement context for ID management
-    
-    Solves:
-    - Track fragmentation 
-    - Track ID resurrection
-    - Duplicate ID assignment
-    """
-
-    def __init__(self, 
-                 config: TrackerConfig,
-                 model_path: str,
-                 show_realtime: bool = False,
-                 display_size: Tuple[int, int] = (1280, 720)):
-        """
-        Initialize unified tracker
-        
-        Args:
-            config: Tracker configuration
-            model_path: Path to YOLOv11 model
-            show_realtime: Show real-time visualization
-            display_size: Display window size
-        """
-        self.config = config
-        self.model_path = model_path
-        self.show_realtime = show_realtime
-        self.display_size = display_size
-        
-        # Initialize logger
-        self.logger = logging.getLogger(f"{__name__}.UnifiedLightPostTracker")
-        
-        # Initialize YOLO model
-        self.model = YOLO(model_path)
-        self.class_names = list(self.model.names.values())
-        self.logger.info(f"Model classes: {self.class_names}")
-        
-        # Initialize core components
-        self.track_manager = CleanTrackManager(config)
-        self.overlap_fixer = OverlapFixer(
-            overlap_threshold=0.3,
-            distance_threshold=1.0
-        )
-        
-        # GPS and movement tracking
-        self.gps_synchronizer: Optional[GPSSynchronizer] = None
-        self.static_car_detector: Optional[StaticCarDetector] = None
-        self.current_gps: Optional[GPSData] = None
-        self.previous_gps: Optional[GPSData] = None
-        self.vehicle_speed: float = 0.0
-        self.vehicle_moved_distance: float = 0.0
-        
-        # Initialize static car detection
-        if config.enable_static_car_detection:
-            static_config = StaticCarConfig(
-                movement_threshold_meters=config.static_movement_threshold_m,
-                stationary_time_threshold=config.static_time_threshold_s,
-                gps_frame_interval=config.gps_frame_interval
-            )
-            self.static_car_detector = StaticCarDetector(static_config)
-            self.logger.info("Static car detection enabled")
-        
-        # Initialize real-time visualizer
-        self.visualizer = None
-        if show_realtime:
-            self.visualizer = RealTimeVisualizer(
-                window_name="Unified Light Post Tracking",
-                display_size=display_size,
-                show_info_panel=True
-            )
-            self.logger.info("Real-time visualization enabled")
-        
-        # Processing statistics
-        self.processing_times = []
-        self.frame_count = 0
-        self.processed_frame_count = 0
-        
-        self.logger.info("Unified Light Post Tracker initialized")
-
-    def process_video(self,
-                     video_path: str,
-                     gps_data: Optional[List[GPSData]] = None,
-                     output_path: Optional[str] = None,
-                     save_results: bool = True) -> Dict[str, Any]:
-        """
-        Process video with unified tracking
-        
-        Args:
-            video_path: Path to input video
-            gps_data: Optional GPS data
-            output_path: Optional output video path
-            save_results: Whether to save results
-            
-        Returns:
-            Processing results dictionary
-        """
-        self.logger.info(f"Starting unified tracking: {video_path}")
-        
-        # Open video
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise IOError(f"Could not open video: {video_path}")
-        
-        # Get video properties
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
-        self.logger.info(f"Video: {total_frames} frames, {fps:.1f} FPS, {width}x{height}")
-        
-        # Initialize GPS synchronizer
-        if gps_data:
-            self.gps_synchronizer = GPSSynchronizer(gps_data, fps, gps_fps=10.0)
-            sync_stats = self.gps_synchronizer.get_processing_statistics()
-            self.logger.info(f"GPS sync: {sync_stats['sync_frames']} frames to process")
-        else:
-            self.logger.warning("No GPS data - processing all frames")
-        
-        # Initialize output manager
-        output_manager = OutputManager(video_path, self.class_names)
-        
-        # Setup video writer
-        out_writer = None
-        if output_path and self.show_realtime:
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            output_fps = fps / self.config.gps_frame_interval if self.gps_synchronizer else fps
-            out_writer = cv2.VideoWriter(output_path, fourcc, output_fps, (width, height))
-        
-        # Processing loop
-        current_frame_idx = 0
-        processed_frames = 0
-        skipped_frames_gps = 0
-        skipped_frames_static = 0
-        
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                
-                start_time = time.time()
-                
-                # Check GPS synchronization
-                should_process_gps = True
-                current_gps = None
-                
-                if self.gps_synchronizer:
-                    should_process_gps = self.gps_synchronizer.should_process_frame(current_frame_idx)
-                    if should_process_gps:
-                        current_gps = self.gps_synchronizer.get_gps_for_frame(current_frame_idx)
-                    else:
-                        skipped_frames_gps += 1
-                
-                # Check static car detection
-                should_process_static = True
-                if should_process_gps and self.static_car_detector and current_gps:
-                    should_process_static = self.static_car_detector.should_process_frame(
-                        current_gps, current_frame_idx
-                    )
-                    if not should_process_static:
-                        skipped_frames_static += 1
-                
-                # Final decision: process frame?
-                should_process = should_process_gps and should_process_static
-                
-                if not should_process:
-                    current_frame_idx += 1
-                    continue
-                
-                # Update GPS movement context
-                self._update_gps_context(current_gps)
-                
-                # Process frame
-                frame_timestamp = current_frame_idx / fps
-                detections = self._process_frame(frame, current_frame_idx, frame_timestamp)
-                
-                # Add to output manager
-                output_manager.add_frame_data(
-                    frame_id=current_frame_idx,
-                    timestamp=frame_timestamp,
-                    detections=detections,
-                    gps_data=current_gps
-                )
-                
-                # Real-time visualization
-                if self.show_realtime and self.visualizer:
-                    should_continue = self._visualize_frame(
-                        frame, detections, current_frame_idx, current_gps, 
-                        total_frames, processed_frames
-                    )
-                    
-                    if not should_continue:
-                        self.logger.info("User requested quit")
-                        break
-                
-                # Save frame to output video
-                if out_writer and self.show_realtime:
-                    vis_frame = self._create_visualization_frame(frame, detections, current_gps)
-                    out_writer.write(vis_frame)
-                
-                # Performance tracking
-                process_time = time.time() - start_time
-                self.processing_times.append(process_time)
-                processed_frames += 1
-                
-                # Progress logging
-                if processed_frames % 30 == 0:
-                    avg_time = np.mean(self.processing_times[-30:])
-                    progress = current_frame_idx / total_frames * 100
-                    
-                    self.logger.info(
-                        f"Progress: {progress:.1f}% | "
-                        f"Processed: {processed_frames} | "
-                        f"Skipped (GPS): {skipped_frames_gps} | "
-                        f"Skipped (Static): {skipped_frames_static} | "
-                        f"Avg time: {avg_time*1000:.1f}ms | "
-                        f"Speed: {self.vehicle_speed:.1f}m/s"
-                    )
-                
-                current_frame_idx += 1
-                
-        except KeyboardInterrupt:
-            self.logger.info("Processing interrupted by user")
-        except Exception as e:
-            self.logger.error(f"Error during processing: {e}")
-            raise
-        finally:
-            # Cleanup
-            cap.release()
-            if out_writer:
-                out_writer.release()
-            if self.visualizer:
-                self.visualizer.close()
-            cv2.destroyAllWindows()
-        
-        # Processing summary
-        total_time = sum(self.processing_times)
-        avg_fps = processed_frames / total_time if total_time > 0 else 0
-        
-        results = {
-            'total_frames': total_frames,
-            'processed_frames': processed_frames,
-            'skipped_frames_gps': skipped_frames_gps,
-            'skipped_frames_static': skipped_frames_static,
-            'processing_time': total_time,
-            'avg_fps': avg_fps,
-            'track_manager_stats': self.track_manager.get_statistics(),
-            'output_summary': output_manager.get_processing_summary()
-        }
-        
-        self.logger.info("=== PROCESSING COMPLETE ===")
-        self.logger.info(f"Total frames: {total_frames}")
-        self.logger.info(f"Processed frames: {processed_frames}")
-        self.logger.info(f"Processing time: {total_time:.1f}s")
-        self.logger.info(f"Average FPS: {avg_fps:.1f}")
-        
-        # Track manager statistics
-        track_stats = self.track_manager.get_statistics()
-        self.logger.info(f"Active tracks: {track_stats['active_tracks']}")
-        self.logger.info(f"Total tracks created: {track_stats['total_tracks_created']}")
-        
-        # Save results
-        if save_results:
-            json_path, csv_path = output_manager.export_both()
-            results['json_output'] = json_path
-            results['csv_output'] = csv_path
-            
-            # Print summary
-            output_manager.print_summary()
-        
-        return results
-    
-    def _update_gps_context(self, current_gps: Optional[GPSData]):
-        """Update GPS movement context for tracking decisions"""
-        if current_gps is None:
-            return
-        
-        # Calculate vehicle movement
-        if self.previous_gps is not None:
-            # Calculate distance moved
-            distance = self._calculate_gps_distance(
-                self.previous_gps.latitude, self.previous_gps.longitude,
-                current_gps.latitude, current_gps.longitude
-            )
-            
-            # Calculate time difference
-            dt = current_gps.timestamp - self.previous_gps.timestamp
-            if dt > 0:
-                self.vehicle_speed = distance / dt
-                self.vehicle_moved_distance += distance
-            
-            # Pass movement context to track manager
-            self.track_manager.update_movement_context(
-                vehicle_speed=self.vehicle_speed,
-                distance_moved=distance,
-                total_distance=self.vehicle_moved_distance
-            )
-        
-        # Update GPS references
-        self.current_gps = current_gps
-        self.previous_gps = current_gps
-    
-    def _calculate_gps_distance(self, lat1: float, lon1: float, 
-                               lat2: float, lon2: float) -> float:
-        """Calculate distance between GPS points in meters"""
-        R = 6378137.0  # Earth radius
-        lat1_rad = np.radians(lat1)
-        lat2_rad = np.radians(lat2)
-        dlat = np.radians(lat2 - lat1)
-        dlon = np.radians(lon2 - lon1)
-        
-        a = (np.sin(dlat/2)**2 + 
-             np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon/2)**2)
-        c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
-        
-        return R * c
-    
-    def _process_frame(self, frame: np.ndarray, frame_id: int, timestamp: float) -> List[Detection]:
-        """Process single frame with GPS-informed tracking"""
-        
-        # NEW: Update GPS context for motion prediction
-        if hasattr(self.track_manager, 'update_gps_context'):
-            self.track_manager.update_gps_context(self.current_gps, self.previous_gps)
-        
-        # Run YOLO tracking (existing code)
-        track_params = self.config.get_ultralytics_track_params()
-        results = self.model.track(frame, **track_params)
-        
-        # Apply overlap fixer (existing code)
-        fixed_detections = self.overlap_fixer.fix_ultralytics_results(
-            results[0], self.current_gps, frame_id
-        )
-        
-        # Convert to Detection objects (existing code)
-        raw_detections = self._convert_fixed_detections(fixed_detections, frame_id)
-        
-        # Apply GPS-informed track management (existing code)
-        processed_detections = self.track_manager.process_frame_detections(
-            raw_detections, frame_id, timestamp
-        )
-        
-        return processed_detections
-        
-    def _convert_fixed_detections(self, fixed_detections: List[Dict], frame_id: int) -> List[Detection]:
-        """Convert fixed detections to Detection objects"""
-        detections = []
-        
-        for det_dict in fixed_detections:
-            detection = Detection(
-                bbox=np.array(det_dict['bbox']),
-                score=float(det_dict['score']),
-                class_id=int(det_dict['class_id']),
-                frame_id=frame_id
-            )
-            detection.track_id = int(det_dict['track_id'])
-            detections.append(detection)
-        
-        return detections
-    
-    def _visualize_frame(self, frame: np.ndarray, detections: List[Detection],
-                        frame_id: int, gps_data: Optional[GPSData],
-                        total_frames: int, processed_frames: int) -> bool:
-        """Visualize frame with real-time display"""
-        
-        # Prepare frame info
-        frame_info = {
-            'frame_idx': frame_id,
-            'total_frames': total_frames,
-            'processed_frames': processed_frames,
-            'gps_available': gps_data is not None,
-            'vehicle_speed': self.vehicle_speed,
-            'distance_moved': self.vehicle_moved_distance
-        }
-        
-        # Prepare GPS info
-        gps_info = None
-        if gps_data:
-            gps_info = {
-                'latitude': gps_data.latitude,
-                'longitude': gps_data.longitude,
-                'heading': gps_data.heading,
-                'accuracy': gps_data.accuracy,
-                'vehicle_speed_ms': self.vehicle_speed,
-                'vehicle_speed_kmh': self.vehicle_speed * 3.6
-            }
-        
-        # Convert detections to tracks for visualization
-        tracks = []
-        for detection in detections:
-            class MockTrack:
-                def __init__(self, detection):
-                    self.track_id = detection.track_id
-                    self.state = 'confirmed'
-                    self.detections = [detection]
-                    self.hits = 1
-                    self.age = 1
-                    self.time_since_update = 0
-                    self._bbox = detection.bbox
-                
-                def to_tlbr(self):
-                    return self._bbox
-            
-            track = MockTrack(detection)
-            tracks.append(track)
-        
-        # Visualize
-        return self.visualizer.visualize_frame(
-            frame, detections, tracks, gps_info, frame_info
-        )
-    
-    def _create_visualization_frame(self, frame: np.ndarray, 
-                                   detections: List[Detection],
-                                   gps_data: Optional[GPSData]) -> np.ndarray:
-        """Create visualization frame for video output"""
-        
-        vis_frame = frame.copy()
-        
-        # Draw detections
-        for detection in detections:
-            bbox = detection.bbox.astype(int)
-            class_name = self.class_names[detection.class_id] if detection.class_id < len(self.class_names) else f"class_{detection.class_id}"
-            
-            # Draw bounding box
-            cv2.rectangle(vis_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
-            
-            # Draw label
-            label = f"ID:{detection.track_id} {class_name} {detection.score:.2f}"
-            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-            
-            # Background for text
-            cv2.rectangle(vis_frame, 
-                         (bbox[0], bbox[1] - label_size[1] - 10),
-                         (bbox[0] + label_size[0], bbox[1]),
-                         (0, 255, 0), -1)
-            
-            # Text
-            cv2.putText(vis_frame, label, (bbox[0], bbox[1] - 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-        
-        # Add GPS and movement info overlay
-        if gps_data:
-            info_lines = [
-                f"GPS: {gps_data.latitude:.6f}, {gps_data.longitude:.6f}",
-                f"Speed: {self.vehicle_speed * 3.6:.1f} km/h",
-                f"Distance: {self.vehicle_moved_distance:.1f} m"
-            ]
-            
-            y_offset = 30
-            for line in info_lines:
-                cv2.putText(vis_frame, line, (10, y_offset),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-                y_offset += 30
-        
-        # Add detection count
-        det_text = f"Detections: {len(detections)}"
-        cv2.putText(vis_frame, det_text, (10, vis_frame.shape[0] - 60),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-        
-        # Add track statistics
-        track_stats = self.track_manager.get_statistics()
-        stats_text = f"Active Tracks: {track_stats['active_tracks']}"
-        cv2.putText(vis_frame, stats_text, (10, vis_frame.shape[0] - 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-        
-        return vis_frame
-    
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get comprehensive tracking statistics"""
-        track_stats = self.track_manager.get_statistics()
-        
-        return {
-            'processed_frames': self.processed_frame_count,
-            'avg_processing_time': np.mean(self.processing_times) if self.processing_times else 0,
-            'vehicle_speed': self.vehicle_speed,
-            'distance_moved': self.vehicle_moved_distance,
-            'track_manager': track_stats,
-            'model_classes': self.class_names
-        }
 
 ================
 File: argus_track/utils/gps_sync_tracker.py
@@ -2611,361 +2044,6 @@ class OutputManager:
         }
 
 ================
-File: argus_track/utils/overlap_fixer.py
-================
-# Create new file: argus_track/utils/overlap_fixer.py
-
-"""
-Simple Overlap Fixer for Ultralytics Tracking Issues
-"""
-
-import numpy as np
-import logging
-from typing import List, Dict, Optional, Tuple
-
-class OverlapFixer:
-    """
-    Fixes Ultralytics tracking issues:
-    1. Removes overlapping bounding boxes in same frame
-    2. Consolidates track IDs based on GPS proximity
-    """
-    
-    def __init__(self, overlap_threshold: float = 0.5, distance_threshold: float = 3.0):
-        """
-        Initialize overlap fixer
-        
-        Args:
-            overlap_threshold: IoU threshold for detecting overlaps (0.5 = 50% overlap)
-            distance_threshold: GPS distance threshold for same object (meters)
-        """
-        self.overlap_threshold = overlap_threshold
-        self.distance_threshold = distance_threshold
-        self.logger = logging.getLogger(f"{__name__}.OverlapFixer")
-
-        self.persistent_id_mapping: Dict[int, int] = {}  # ultralytics_id -> stable_id
-        self.stable_id_counter = 1
-        self.id_position_history: Dict[int, List[np.ndarray]] = {}  # stable_id -> recent_positions
-
-        # Track ID consolidation
-        self.id_mapping = {}  # original_id -> consolidated_id
-        self.next_consolidated_id = 1
-        self.track_positions = {}  # track_id -> recent GPS positions
-        self.fixed_count = 0
-        self.overlap_count = 0
-        
-    def fix_ultralytics_results(self, ultralytics_result, current_gps: Optional['GPSData'], 
-                               frame_id: int) -> List[Dict]:
-        """
-        Fix Ultralytics tracking results
-        
-        Args:
-            ultralytics_result: Single result from model.track()[0]
-            current_gps: Current GPS data
-            frame_id: Current frame number
-            
-        Returns:
-            List of fixed detection dictionaries
-        """
-        # Extract raw detections
-        raw_detections = self._extract_detections(ultralytics_result, frame_id)
-        
-        if not raw_detections:
-            return []
-        
-        # Step 1: Remove overlapping bounding boxes
-        non_overlapping = self._remove_overlapping_boxes(raw_detections, frame_id)
-        
-        # Step 2: Consolidate track IDs
-        consolidated = self._consolidate_track_ids(non_overlapping, current_gps)
-        
-        return consolidated
-    
-    def _extract_detections(self, result, frame_id: int) -> List[Dict]:
-        """Extract detections from Ultralytics result"""
-        detections = []
-        
-        if not result.boxes or not hasattr(result.boxes, 'id') or result.boxes.id is None:
-            return detections
-        
-        boxes = result.boxes.xyxy.cpu().numpy()
-        scores = result.boxes.conf.cpu().numpy()
-        classes = result.boxes.cls.cpu().numpy().astype(int)
-        track_ids = result.boxes.id.cpu().numpy().astype(int)
-        
-        for box, score, cls_id, track_id in zip(boxes, scores, classes, track_ids):
-            detections.append({
-                'bbox': box,
-                'score': float(score),
-                'class_id': int(cls_id),
-                'track_id': int(track_id),
-                'frame': frame_id
-            })
-        
-        return detections
-    
-    def _remove_overlapping_boxes(self, detections: List[Dict], frame_id: int) -> List[Dict]:
-        """Remove overlapping bounding boxes in same frame"""
-        if len(detections) <= 1:
-            return detections
-        
-        # Calculate IoU for all pairs
-        keep_indices = set(range(len(detections)))
-        overlaps_removed = 0
-        
-        for i in range(len(detections)):
-            if i not in keep_indices:
-                continue
-                
-            for j in range(i + 1, len(detections)):
-                if j not in keep_indices:
-                    continue
-                
-                # Calculate IoU
-                iou = self._calculate_iou(detections[i]['bbox'], detections[j]['bbox'])
-                
-                if iou > self.overlap_threshold:
-                    # Keep the detection with higher confidence
-                    if detections[i]['score'] >= detections[j]['score']:
-                        keep_indices.discard(j)
-                        overlaps_removed += 1
-                        self.logger.debug(f"Frame {frame_id}: Removed overlapping track {detections[j]['track_id']} "
-                                        f"(IoU {iou:.2f} with track {detections[i]['track_id']})")
-                    else:
-                        keep_indices.discard(i)
-                        overlaps_removed += 1
-                        self.logger.debug(f"Frame {frame_id}: Removed overlapping track {detections[i]['track_id']} "
-                                        f"(IoU {iou:.2f} with track {detections[j]['track_id']})")
-                        break
-        
-        if overlaps_removed > 0:
-            self.overlap_count += overlaps_removed
-            self.logger.info(f"Frame {frame_id}: Removed {overlaps_removed} overlapping boxes")
-        
-        return [detections[i] for i in sorted(keep_indices)]
-    
-    def _consolidate_track_ids(self, detections: List[Dict], current_gps: Optional['GPSData']) -> List[Dict]:
-        """Enhanced consolidation with persistent memory"""
-        
-        for detection in detections:
-            original_id = detection['track_id']
-            
-            # Get stable consolidated ID
-            consolidated_id = self._get_consolidated_id(detection, current_gps)
-            
-            # Update detection
-            detection['original_track_id'] = original_id
-            detection['track_id'] = consolidated_id
-            
-            if original_id != consolidated_id:
-                self.fixed_count += 1
-        
-        return detections
-
-    def _consolidate_track_ids_bkp(self, detections: List[Dict], current_gps: Optional['GPSData']) -> List[Dict]:
-        """Consolidate track IDs to prevent multiple IDs for same object"""
-        
-        for detection in detections:
-            original_id = detection['track_id']
-            
-            # Get consolidated ID
-            consolidated_id = self._get_consolidated_id(detection, current_gps)
-            
-            # Update detection
-            detection['original_track_id'] = original_id
-            detection['track_id'] = consolidated_id
-            
-            if original_id != consolidated_id:
-                self.fixed_count += 1
-                self.logger.info(f"Frame {detection['frame']}: Consolidated track {original_id} → {consolidated_id}")
-        
-        return detections
-    
-    def _get_consolidated_id(self, detection: Dict, current_gps: Optional['GPSData']) -> int:
-        """Enhanced consolidation with persistent memory"""
-        original_id = detection['track_id']
-        detection_center = np.array([(detection['bbox'][0] + detection['bbox'][2]) / 2,
-                                   (detection['bbox'][1] + detection['bbox'][3]) / 2])
-        
-        # Check if we've seen this ultralytics ID before
-        if original_id in self.persistent_id_mapping:
-            stable_id = self.persistent_id_mapping[original_id]
-            self.logger.info(f"Reusing known mapping: {original_id} -> {stable_id}")
-            
-            # Update position history
-            if stable_id not in self.id_position_history:
-                self.id_position_history[stable_id] = []
-            self.id_position_history[stable_id].append(detection_center)
-            
-            # Keep only recent positions
-            if len(self.id_position_history[stable_id]) > 10:
-                self.id_position_history[stable_id] = self.id_position_history[stable_id][-10:]
-            
-            return stable_id
-        
-        # Check if this detection is close to any existing stable track
-        best_match_id = None
-        best_distance = float('inf')
-        
-        for stable_id, positions in self.id_position_history.items():
-            if not positions:
-                continue
-            
-            # Check distance to most recent positions
-            recent_positions = positions[-3:]  # Last 3 positions
-            for pos in recent_positions:
-                distance = np.linalg.norm(detection_center - pos)
-                
-                # Use spatial proximity to identify same object
-                if distance < 50.0 and distance < best_distance:  # 50px tolerance
-                    best_match_id = stable_id
-                    best_distance = distance
-        
-        if best_match_id is not None:
-            # Map to existing stable ID
-            self.persistent_id_mapping[original_id] = best_match_id
-            self.id_position_history[best_match_id].append(detection_center)
-            self.logger.info(f"Spatial match: {original_id} -> {best_match_id} (distance: {best_distance:.1f}px)")
-            return best_match_id
-        
-        # Create new stable ID
-        new_stable_id = self.stable_id_counter
-        self.stable_id_counter += 1
-        
-        self.persistent_id_mapping[original_id] = new_stable_id
-        self.id_position_history[new_stable_id] = [detection_center]
-        
-        self.logger.info(f"New stable ID: {original_id} -> {new_stable_id}")
-        return new_stable_id
-
-    def _get_consolidated_id_bkp(self, detection: Dict, current_gps: Optional['GPSData']) -> int:
-        """Get consolidated track ID for detection"""
-        original_id = detection['track_id']
-        
-        # If we've seen this original ID before, return its mapping
-        if original_id in self.id_mapping:
-            return self.id_mapping[original_id]
-        
-        # Check if this detection is close to any existing tracks (if we have GPS)
-        if current_gps:
-            detection_gps = self._estimate_detection_gps(detection, current_gps)
-            
-            if detection_gps:
-                # Find existing tracks within distance threshold
-                for existing_id, positions in self.track_positions.items():
-                    if not positions:
-                        continue
-                    
-                    # Check distance to most recent position
-                    recent_pos = positions[-1]
-                    distance = self._gps_distance(
-                        detection_gps[0], detection_gps[1],
-                        recent_pos['lat'], recent_pos['lon']
-                    )
-                    
-                    if distance <= self.distance_threshold:
-                        # Merge with existing track
-                        self.id_mapping[original_id] = existing_id
-                        
-                        # Add position to existing track
-                        self.track_positions[existing_id].append({
-                            'lat': detection_gps[0],
-                            'lon': detection_gps[1],
-                            'frame': detection['frame']
-                        })
-                        
-                        self.logger.info(f"Merged track {original_id} into {existing_id} (distance: {distance:.1f}m)")
-                        return existing_id
-        
-        # This is a genuinely new track
-        new_consolidated_id = self.next_consolidated_id
-        self.id_mapping[original_id] = new_consolidated_id
-        self.next_consolidated_id += 1
-        
-        # Initialize position tracking
-        if current_gps:
-            detection_gps = self._estimate_detection_gps(detection, current_gps)
-            if detection_gps:
-                self.track_positions[new_consolidated_id] = [{
-                    'lat': detection_gps[0],
-                    'lon': detection_gps[1],
-                    'frame': detection['frame']
-                }]
-        
-        return new_consolidated_id
-    
-    def _estimate_detection_gps(self, detection: Dict, gps: 'GPSData') -> Optional[Tuple[float, float]]:
-        """Estimate GPS coordinates for detection (simplified version)"""
-        try:
-            bbox = detection['bbox']
-            bbox_height = bbox[3] - bbox[1]
-            
-            if bbox_height <= 0:
-                return None
-            
-            # Simple depth estimation
-            focal_length = 1400
-            lightpost_height = 4.0
-            estimated_depth = (lightpost_height * focal_length) / bbox_height
-            
-            # GPS calculation (simplified)
-            bbox_center_x = (bbox[0] + bbox[2]) / 2
-            image_width = 1920  # Assume standard width
-            
-            pixels_from_center = bbox_center_x - (image_width / 2)
-            degrees_per_pixel = 60.0 / image_width
-            bearing_offset = pixels_from_center * degrees_per_pixel
-            object_bearing = gps.heading + bearing_offset
-            
-            import math
-            lat_offset = (estimated_depth * math.cos(math.radians(object_bearing))) / 111000
-            lon_offset = (estimated_depth * math.sin(math.radians(object_bearing))) / (111000 * math.cos(math.radians(gps.latitude)))
-            
-            object_lat = gps.latitude + lat_offset
-            object_lon = gps.longitude + lon_offset
-            
-            return (object_lat, object_lon)
-            
-        except Exception:
-            return None
-    
-    def _calculate_iou(self, box1: np.ndarray, box2: np.ndarray) -> float:
-        """Calculate IoU between two bounding boxes"""
-        x1 = max(box1[0], box2[0])
-        y1 = max(box1[1], box2[1])
-        x2 = min(box1[2], box2[2])
-        y2 = min(box1[3], box2[3])
-        
-        intersection = max(0, x2 - x1) * max(0, y2 - y1)
-        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
-        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
-        union = area1 + area2 - intersection
-        
-        return intersection / union if union > 0 else 0
-    
-    def _gps_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-        """Calculate distance between GPS points in meters"""
-        R = 6378137.0
-        lat1_rad = np.radians(lat1)
-        lat2_rad = np.radians(lat2)
-        dlat = np.radians(lat2 - lat1)
-        dlon = np.radians(lon2 - lon1)
-        
-        a = (np.sin(dlat/2)**2 + 
-             np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon/2)**2)
-        c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
-        
-        return R * c
-    
-    def get_statistics(self) -> Dict:
-        """Get overlap fixing statistics"""
-        return {
-            'overlaps_removed': self.overlap_count,
-            'ids_consolidated': self.fixed_count,
-            'unique_tracks': len(set(self.id_mapping.values())),
-            'original_tracks': len(self.id_mapping)
-        }
-
-================
 File: argus_track/utils/static_car_detector.py
 ================
 # argus_track/utils/static_car_detector.py - NEW FILE
@@ -3610,6 +2688,522 @@ class Track:
         }
 
 ================
+File: argus_track/trackers/unique_tracker.py
+================
+# argus_track/trackers/unified_lightpost_tracker.py
+
+"""
+Unified Light Post Tracker - Clean, GPS-informed tracking
+=========================================================
+
+Combines best features from both trackers with GPS movement context
+to solve track fragmentation and resurrection issues.
+"""
+
+import cv2
+import numpy as np
+import time
+import logging
+from pathlib import Path
+from typing import List, Dict, Optional, Any, Tuple
+
+from ultralytics import YOLO
+from ..config import TrackerConfig
+from ..core import Detection, GPSData
+from ..utils.smart_track_manager import CleanTrackManager
+from ..utils.output_manager import OutputManager
+from ..utils.gps_sync_tracker import GPSSynchronizer
+from ..utils.static_car_detector import StaticCarDetector, StaticCarConfig
+from ..utils.visualization import RealTimeVisualizer
+from ..utils.overlap_fixer import OverlapFixer
+
+
+class UnifiedLightPostTracker:
+    """
+    Unified Light Post Tracker with GPS movement context
+    
+    Clean, focused tracker that uses GPS to:
+    - Detect vehicle movement (skip stationary frames)
+    - Prevent impossible track resurrections (forward motion logic)
+    - Provide movement context for ID management
+    
+    Solves:
+    - Track fragmentation 
+    - Track ID resurrection
+    - Duplicate ID assignment
+    """
+
+    def __init__(self, 
+                 config: TrackerConfig,
+                 model_path: str,
+                 show_realtime: bool = False,
+                 display_size: Tuple[int, int] = (1280, 720)):
+        """
+        Initialize unified tracker
+        
+        Args:
+            config: Tracker configuration
+            model_path: Path to YOLOv11 model
+            show_realtime: Show real-time visualization
+            display_size: Display window size
+        """
+        self.config = config
+        self.model_path = model_path
+        self.show_realtime = show_realtime
+        self.display_size = display_size
+        
+        # Initialize logger
+        self.logger = logging.getLogger(f"{__name__}.UnifiedLightPostTracker")
+        
+        # Initialize YOLO model
+        self.model = YOLO(model_path)
+        self.class_names = list(self.model.names.values())
+        self.logger.info(f"Model classes: {self.class_names}")
+        
+        # Initialize core components
+        self.track_manager = CleanTrackManager(config)
+        self.overlap_fixer = OverlapFixer(
+            overlap_threshold=0.3,
+            distance_threshold=1.0
+        )
+        
+        # GPS and movement tracking
+        self.gps_synchronizer: Optional[GPSSynchronizer] = None
+        self.static_car_detector: Optional[StaticCarDetector] = None
+        self.current_gps: Optional[GPSData] = None
+        self.previous_gps: Optional[GPSData] = None
+        self.vehicle_speed: float = 0.0
+        self.vehicle_moved_distance: float = 0.0
+        
+        # Initialize static car detection
+        if config.enable_static_car_detection:
+            static_config = StaticCarConfig(
+                movement_threshold_meters=config.static_movement_threshold_m,
+                stationary_time_threshold=config.static_time_threshold_s,
+                gps_frame_interval=config.gps_frame_interval
+            )
+            self.static_car_detector = StaticCarDetector(static_config)
+            self.logger.info("Static car detection enabled")
+        
+        # Initialize real-time visualizer
+        self.visualizer = None
+        if show_realtime:
+            self.visualizer = RealTimeVisualizer(
+                window_name="Unified Light Post Tracking",
+                display_size=display_size,
+                show_info_panel=True
+            )
+            self.logger.info("Real-time visualization enabled")
+        
+        # Processing statistics
+        self.processing_times = []
+        self.frame_count = 0
+        self.processed_frame_count = 0
+        
+        self.logger.info("Unified Light Post Tracker initialized")
+
+    def process_video(self,
+                     video_path: str,
+                     gps_data: Optional[List[GPSData]] = None,
+                     output_path: Optional[str] = None,
+                     save_results: bool = True) -> Dict[str, Any]:
+        """
+        Process video with unified tracking
+        
+        Args:
+            video_path: Path to input video
+            gps_data: Optional GPS data
+            output_path: Optional output video path
+            save_results: Whether to save results
+            
+        Returns:
+            Processing results dictionary
+        """
+        self.logger.info(f"Starting unified tracking: {video_path}")
+        
+        # Open video
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise IOError(f"Could not open video: {video_path}")
+        
+        # Get video properties
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        self.logger.info(f"Video: {total_frames} frames, {fps:.1f} FPS, {width}x{height}")
+        
+        # Initialize GPS synchronizer
+        if gps_data:
+            self.gps_synchronizer = GPSSynchronizer(gps_data, fps, gps_fps=10.0)
+            sync_stats = self.gps_synchronizer.get_processing_statistics()
+            self.logger.info(f"GPS sync: {sync_stats['sync_frames']} frames to process")
+        else:
+            self.logger.warning("No GPS data - processing all frames")
+        
+        # Initialize output manager
+        output_manager = OutputManager(video_path, self.class_names)
+        
+        # Setup video writer
+        out_writer = None
+        if output_path and self.show_realtime:
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            output_fps = fps / self.config.gps_frame_interval if self.gps_synchronizer else fps
+            out_writer = cv2.VideoWriter(output_path, fourcc, output_fps, (width, height))
+        
+        # Processing loop
+        current_frame_idx = 0
+        processed_frames = 0
+        skipped_frames_gps = 0
+        skipped_frames_static = 0
+        
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                start_time = time.time()
+                
+                # Check GPS synchronization
+                should_process_gps = True
+                current_gps = None
+                
+                if self.gps_synchronizer:
+                    should_process_gps = self.gps_synchronizer.should_process_frame(current_frame_idx)
+                    if should_process_gps:
+                        current_gps = self.gps_synchronizer.get_gps_for_frame(current_frame_idx)
+                    else:
+                        skipped_frames_gps += 1
+                
+                # Check static car detection
+                should_process_static = True
+                if should_process_gps and self.static_car_detector and current_gps:
+                    should_process_static = self.static_car_detector.should_process_frame(
+                        current_gps, current_frame_idx
+                    )
+                    if not should_process_static:
+                        skipped_frames_static += 1
+                
+                # Final decision: process frame?
+                should_process = should_process_gps and should_process_static
+                
+                if not should_process:
+                    current_frame_idx += 1
+                    continue
+                
+                # Update GPS movement context
+                self._update_gps_context(current_gps)
+                
+                # Process frame
+                frame_timestamp = current_frame_idx / fps
+                detections = self._process_frame(frame, current_frame_idx, frame_timestamp)
+                
+                # Add to output manager
+                output_manager.add_frame_data(
+                    frame_id=current_frame_idx,
+                    timestamp=frame_timestamp,
+                    detections=detections,
+                    gps_data=current_gps
+                )
+                
+                # Real-time visualization
+                if self.show_realtime and self.visualizer:
+                    should_continue = self._visualize_frame(
+                        frame, detections, current_frame_idx, current_gps, 
+                        total_frames, processed_frames
+                    )
+                    
+                    if not should_continue:
+                        self.logger.info("User requested quit")
+                        break
+                
+                # Save frame to output video
+                if out_writer and self.show_realtime:
+                    vis_frame = self._create_visualization_frame(frame, detections, current_gps)
+                    out_writer.write(vis_frame)
+                
+                # Performance tracking
+                process_time = time.time() - start_time
+                self.processing_times.append(process_time)
+                processed_frames += 1
+                
+                # Progress logging
+                if processed_frames % 30 == 0:
+                    avg_time = np.mean(self.processing_times[-30:])
+                    progress = current_frame_idx / total_frames * 100
+                    
+                    self.logger.info(
+                        f"Progress: {progress:.1f}% | "
+                        f"Processed: {processed_frames} | "
+                        f"Skipped (GPS): {skipped_frames_gps} | "
+                        f"Skipped (Static): {skipped_frames_static} | "
+                        f"Avg time: {avg_time*1000:.1f}ms | "
+                        f"Speed: {self.vehicle_speed:.1f}m/s"
+                    )
+                
+                current_frame_idx += 1
+                
+        except KeyboardInterrupt:
+            self.logger.info("Processing interrupted by user")
+        except Exception as e:
+            self.logger.error(f"Error during processing: {e}")
+            raise
+        finally:
+            # Cleanup
+            cap.release()
+            if out_writer:
+                out_writer.release()
+            if self.visualizer:
+                self.visualizer.close()
+            cv2.destroyAllWindows()
+        
+        # Processing summary
+        total_time = sum(self.processing_times)
+        avg_fps = processed_frames / total_time if total_time > 0 else 0
+        
+        results = {
+            'total_frames': total_frames,
+            'processed_frames': processed_frames,
+            'skipped_frames_gps': skipped_frames_gps,
+            'skipped_frames_static': skipped_frames_static,
+            'processing_time': total_time,
+            'avg_fps': avg_fps,
+            'track_manager_stats': self.track_manager.get_statistics(),
+            'output_summary': output_manager.get_processing_summary()
+        }
+        
+        self.logger.info("=== PROCESSING COMPLETE ===")
+        self.logger.info(f"Total frames: {total_frames}")
+        self.logger.info(f"Processed frames: {processed_frames}")
+        self.logger.info(f"Processing time: {total_time:.1f}s")
+        self.logger.info(f"Average FPS: {avg_fps:.1f}")
+        
+        # Track manager statistics
+        track_stats = self.track_manager.get_statistics()
+        self.logger.info(f"Active tracks: {track_stats['active_tracks']}")
+        self.logger.info(f"Total tracks created: {track_stats['total_tracks_created']}")
+        
+        # Save results
+        if save_results:
+            json_path, csv_path = output_manager.export_both()
+            results['json_output'] = json_path
+            results['csv_output'] = csv_path
+            
+            # Print summary
+            output_manager.print_summary()
+        
+        return results
+    
+    def _update_gps_context(self, current_gps: Optional[GPSData]):
+        """Update GPS movement context for tracking decisions"""
+        if current_gps is None:
+            return
+        
+        # Calculate vehicle movement
+        if self.previous_gps is not None:
+            # Calculate distance moved
+            distance = self._calculate_gps_distance(
+                self.previous_gps.latitude, self.previous_gps.longitude,
+                current_gps.latitude, current_gps.longitude
+            )
+            
+            # Calculate time difference
+            dt = current_gps.timestamp - self.previous_gps.timestamp
+            if dt > 0:
+                self.vehicle_speed = distance / dt
+                self.vehicle_moved_distance += distance
+            
+            # Pass movement context to track manager
+            self.track_manager.update_movement_context(
+                vehicle_speed=self.vehicle_speed,
+                distance_moved=distance,
+                total_distance=self.vehicle_moved_distance
+            )
+        
+        # Update GPS references
+        self.current_gps = current_gps
+        self.previous_gps = current_gps
+    
+    def _calculate_gps_distance(self, lat1: float, lon1: float, 
+                               lat2: float, lon2: float) -> float:
+        """Calculate distance between GPS points in meters"""
+        R = 6378137.0  # Earth radius
+        lat1_rad = np.radians(lat1)
+        lat2_rad = np.radians(lat2)
+        dlat = np.radians(lat2 - lat1)
+        dlon = np.radians(lon2 - lon1)
+        
+        a = (np.sin(dlat/2)**2 + 
+             np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon/2)**2)
+        c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+        
+        return R * c
+    
+    def _process_frame(self, frame: np.ndarray, frame_id: int, timestamp: float) -> List[Detection]:
+        """Process single frame with GPS-informed tracking"""
+        
+        # NEW: Update GPS context for motion prediction
+        if hasattr(self.track_manager, 'update_gps_context'):
+            self.track_manager.update_gps_context(self.current_gps, self.previous_gps)
+        
+        # Run YOLO tracking (existing code)
+        track_params = self.config.get_ultralytics_track_params()
+        results = self.model.track(frame, **track_params)
+        
+        # Apply overlap fixer (existing code)
+        fixed_detections = self.overlap_fixer.fix_ultralytics_results(
+            results[0], self.current_gps, frame_id
+        )
+        
+        # Convert to Detection objects (existing code)
+        raw_detections = self._convert_fixed_detections(fixed_detections, frame_id)
+        
+        # Apply GPS-informed track management (existing code)
+        processed_detections = self.track_manager.process_frame_detections(
+            raw_detections, frame_id, timestamp
+        )
+        
+        return processed_detections
+        
+    def _convert_fixed_detections(self, fixed_detections: List[Dict], frame_id: int) -> List[Detection]:
+        """Convert fixed detections to Detection objects"""
+        detections = []
+        
+        for det_dict in fixed_detections:
+            detection = Detection(
+                bbox=np.array(det_dict['bbox']),
+                score=float(det_dict['score']),
+                class_id=int(det_dict['class_id']),
+                frame_id=frame_id
+            )
+            detection.track_id = int(det_dict['track_id'])
+            detections.append(detection)
+        
+        return detections
+    
+    def _visualize_frame(self, frame: np.ndarray, detections: List[Detection],
+                        frame_id: int, gps_data: Optional[GPSData],
+                        total_frames: int, processed_frames: int) -> bool:
+        """Visualize frame with real-time display"""
+        
+        # Prepare frame info
+        frame_info = {
+            'frame_idx': frame_id,
+            'total_frames': total_frames,
+            'processed_frames': processed_frames,
+            'gps_available': gps_data is not None,
+            'vehicle_speed': self.vehicle_speed,
+            'distance_moved': self.vehicle_moved_distance
+        }
+        
+        # Prepare GPS info
+        gps_info = None
+        if gps_data:
+            gps_info = {
+                'latitude': gps_data.latitude,
+                'longitude': gps_data.longitude,
+                'heading': gps_data.heading,
+                'accuracy': gps_data.accuracy,
+                'vehicle_speed_ms': self.vehicle_speed,
+                'vehicle_speed_kmh': self.vehicle_speed * 3.6
+            }
+        
+        # Convert detections to tracks for visualization
+        tracks = []
+        for detection in detections:
+            class MockTrack:
+                def __init__(self, detection):
+                    self.track_id = detection.track_id
+                    self.state = 'confirmed'
+                    self.detections = [detection]
+                    self.hits = 1
+                    self.age = 1
+                    self.time_since_update = 0
+                    self._bbox = detection.bbox
+                
+                def to_tlbr(self):
+                    return self._bbox
+            
+            track = MockTrack(detection)
+            tracks.append(track)
+        
+        # Visualize
+        return self.visualizer.visualize_frame(
+            frame, detections, tracks, gps_info, frame_info
+        )
+    
+    def _create_visualization_frame(self, frame: np.ndarray, 
+                                   detections: List[Detection],
+                                   gps_data: Optional[GPSData]) -> np.ndarray:
+        """Create visualization frame for video output"""
+        
+        vis_frame = frame.copy()
+        
+        # Draw detections
+        for detection in detections:
+            bbox = detection.bbox.astype(int)
+            class_name = self.class_names[detection.class_id] if detection.class_id < len(self.class_names) else f"class_{detection.class_id}"
+            
+            # Draw bounding box
+            cv2.rectangle(vis_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
+            
+            # Draw label
+            label = f"ID:{detection.track_id} {class_name} {detection.score:.2f}"
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+            
+            # Background for text
+            cv2.rectangle(vis_frame, 
+                         (bbox[0], bbox[1] - label_size[1] - 10),
+                         (bbox[0] + label_size[0], bbox[1]),
+                         (0, 255, 0), -1)
+            
+            # Text
+            cv2.putText(vis_frame, label, (bbox[0], bbox[1] - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+        
+        # Add GPS and movement info overlay
+        if gps_data:
+            info_lines = [
+                f"GPS: {gps_data.latitude:.6f}, {gps_data.longitude:.6f}",
+                f"Speed: {self.vehicle_speed * 3.6:.1f} km/h",
+                f"Distance: {self.vehicle_moved_distance:.1f} m"
+            ]
+            
+            y_offset = 30
+            for line in info_lines:
+                cv2.putText(vis_frame, line, (10, y_offset),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                y_offset += 30
+        
+        # Add detection count
+        det_text = f"Detections: {len(detections)}"
+        cv2.putText(vis_frame, det_text, (10, vis_frame.shape[0] - 60),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+        
+        # Add track statistics
+        track_stats = self.track_manager.get_statistics()
+        stats_text = f"Active Tracks: {track_stats['active_tracks']}"
+        cv2.putText(vis_frame, stats_text, (10, vis_frame.shape[0] - 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+        
+        return vis_frame
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get comprehensive tracking statistics"""
+        track_stats = self.track_manager.get_statistics()
+        
+        return {
+            'processed_frames': self.processed_frame_count,
+            'avg_processing_time': np.mean(self.processing_times) if self.processing_times else 0,
+            'vehicle_speed': self.vehicle_speed,
+            'distance_moved': self.vehicle_moved_distance,
+            'track_manager': track_stats,
+            'model_classes': self.class_names
+        }
+
+================
 File: argus_track/utils/gps_extraction.py
 ================
 # argus_track/utils/gps_extraction.py (NEW FILE)
@@ -4167,6 +3761,361 @@ def save_gps_to_csv(gps_data: List[GPSData], output_path: str) -> None:
             ])
     
     logger.info(f"Saved {len(gps_data)} GPS points to {output_path}")
+
+================
+File: argus_track/utils/overlap_fixer.py
+================
+# Create new file: argus_track/utils/overlap_fixer.py
+
+"""
+Simple Overlap Fixer for Ultralytics Tracking Issues
+"""
+
+import numpy as np
+import logging
+from typing import List, Dict, Optional, Tuple
+
+class OverlapFixer:
+    """
+    Fixes Ultralytics tracking issues:
+    1. Removes overlapping bounding boxes in same frame
+    2. Consolidates track IDs based on GPS proximity
+    """
+    
+    def __init__(self, overlap_threshold: float = 0.5, distance_threshold: float = 3.0):
+        """
+        Initialize overlap fixer
+        
+        Args:
+            overlap_threshold: IoU threshold for detecting overlaps (0.5 = 50% overlap)
+            distance_threshold: GPS distance threshold for same object (meters)
+        """
+        self.overlap_threshold = overlap_threshold
+        self.distance_threshold = distance_threshold
+        self.logger = logging.getLogger(f"{__name__}.OverlapFixer")
+
+        self.persistent_id_mapping: Dict[int, int] = {}  # ultralytics_id -> stable_id
+        self.stable_id_counter = 1
+        self.id_position_history: Dict[int, List[np.ndarray]] = {}  # stable_id -> recent_positions
+
+        # Track ID consolidation
+        self.id_mapping = {}  # original_id -> consolidated_id
+        self.next_consolidated_id = 1
+        self.track_positions = {}  # track_id -> recent GPS positions
+        self.fixed_count = 0
+        self.overlap_count = 0
+        
+    def fix_ultralytics_results(self, ultralytics_result, current_gps: Optional['GPSData'], 
+                               frame_id: int) -> List[Dict]:
+        """
+        Fix Ultralytics tracking results
+        
+        Args:
+            ultralytics_result: Single result from model.track()[0]
+            current_gps: Current GPS data
+            frame_id: Current frame number
+            
+        Returns:
+            List of fixed detection dictionaries
+        """
+        # Extract raw detections
+        raw_detections = self._extract_detections(ultralytics_result, frame_id)
+        
+        if not raw_detections:
+            return []
+        
+        # Step 1: Remove overlapping bounding boxes
+        non_overlapping = self._remove_overlapping_boxes(raw_detections, frame_id)
+        
+        # Step 2: Consolidate track IDs
+        consolidated = self._consolidate_track_ids(non_overlapping, current_gps)
+        
+        return consolidated
+    
+    def _extract_detections(self, result, frame_id: int) -> List[Dict]:
+        """Extract detections from Ultralytics result"""
+        detections = []
+        
+        if not result.boxes or not hasattr(result.boxes, 'id') or result.boxes.id is None:
+            return detections
+        
+        boxes = result.boxes.xyxy.cpu().numpy()
+        scores = result.boxes.conf.cpu().numpy()
+        classes = result.boxes.cls.cpu().numpy().astype(int)
+        track_ids = result.boxes.id.cpu().numpy().astype(int)
+        
+        for box, score, cls_id, track_id in zip(boxes, scores, classes, track_ids):
+            detections.append({
+                'bbox': box,
+                'score': float(score),
+                'class_id': int(cls_id),
+                'track_id': int(track_id),
+                'frame': frame_id
+            })
+        
+        return detections
+    
+    def _remove_overlapping_boxes(self, detections: List[Dict], frame_id: int) -> List[Dict]:
+        """Remove overlapping bounding boxes in same frame"""
+        if len(detections) <= 1:
+            return detections
+        
+        # Calculate IoU for all pairs
+        keep_indices = set(range(len(detections)))
+        overlaps_removed = 0
+        
+        for i in range(len(detections)):
+            if i not in keep_indices:
+                continue
+                
+            for j in range(i + 1, len(detections)):
+                if j not in keep_indices:
+                    continue
+                
+                # Calculate IoU
+                iou = self._calculate_iou(detections[i]['bbox'], detections[j]['bbox'])
+                
+                if iou > self.overlap_threshold:
+                    # Keep the detection with higher confidence
+                    if detections[i]['score'] >= detections[j]['score']:
+                        keep_indices.discard(j)
+                        overlaps_removed += 1
+                        self.logger.debug(f"Frame {frame_id}: Removed overlapping track {detections[j]['track_id']} "
+                                        f"(IoU {iou:.2f} with track {detections[i]['track_id']})")
+                    else:
+                        keep_indices.discard(i)
+                        overlaps_removed += 1
+                        self.logger.debug(f"Frame {frame_id}: Removed overlapping track {detections[i]['track_id']} "
+                                        f"(IoU {iou:.2f} with track {detections[j]['track_id']})")
+                        break
+        
+        if overlaps_removed > 0:
+            self.overlap_count += overlaps_removed
+            self.logger.info(f"Frame {frame_id}: Removed {overlaps_removed} overlapping boxes")
+        
+        return [detections[i] for i in sorted(keep_indices)]
+    
+    def _consolidate_track_ids(self, detections: List[Dict], current_gps: Optional['GPSData']) -> List[Dict]:
+        """Enhanced consolidation with persistent memory"""
+        
+        for detection in detections:
+            original_id = detection['track_id']
+            
+            # Get stable consolidated ID
+            consolidated_id = self._get_consolidated_id(detection, current_gps)
+            
+            # Update detection
+            detection['original_track_id'] = original_id
+            detection['track_id'] = consolidated_id
+            
+            if original_id != consolidated_id:
+                self.fixed_count += 1
+        
+        return detections
+
+    def _consolidate_track_ids_bkp(self, detections: List[Dict], current_gps: Optional['GPSData']) -> List[Dict]:
+        """Consolidate track IDs to prevent multiple IDs for same object"""
+        
+        for detection in detections:
+            original_id = detection['track_id']
+            
+            # Get consolidated ID
+            consolidated_id = self._get_consolidated_id(detection, current_gps)
+            
+            # Update detection
+            detection['original_track_id'] = original_id
+            detection['track_id'] = consolidated_id
+            
+            if original_id != consolidated_id:
+                self.fixed_count += 1
+                self.logger.info(f"Frame {detection['frame']}: Consolidated track {original_id} → {consolidated_id}")
+        
+        return detections
+    
+    def _get_consolidated_id(self, detection: Dict, current_gps: Optional['GPSData']) -> int:
+        """Enhanced consolidation with persistent memory"""
+        original_id = detection['track_id']
+        detection_center = np.array([(detection['bbox'][0] + detection['bbox'][2]) / 2,
+                                   (detection['bbox'][1] + detection['bbox'][3]) / 2])
+        
+        # Check if we've seen this ultralytics ID before
+        if original_id in self.persistent_id_mapping:
+            stable_id = self.persistent_id_mapping[original_id]
+            self.logger.info(f"Reusing known mapping: {original_id} -> {stable_id}")
+            
+            # Update position history
+            if stable_id not in self.id_position_history:
+                self.id_position_history[stable_id] = []
+            self.id_position_history[stable_id].append(detection_center)
+            
+            # Keep only recent positions
+            if len(self.id_position_history[stable_id]) > 10:
+                self.id_position_history[stable_id] = self.id_position_history[stable_id][-10:]
+            
+            return stable_id
+        
+        # Check if this detection is close to any existing stable track
+        best_match_id = None
+        best_distance = float('inf')
+        
+        for stable_id, positions in self.id_position_history.items():
+            if not positions:
+                continue
+            
+            # Check distance to most recent positions
+            recent_positions = positions[-3:]  # Last 3 positions
+            for pos in recent_positions:
+                distance = np.linalg.norm(detection_center - pos)
+                
+                # Use spatial proximity to identify same object
+                if distance < 50.0 and distance < best_distance:  # 50px tolerance
+                    best_match_id = stable_id
+                    best_distance = distance
+        
+        if best_match_id is not None:
+            # Map to existing stable ID
+            self.persistent_id_mapping[original_id] = best_match_id
+            self.id_position_history[best_match_id].append(detection_center)
+            self.logger.info(f"Spatial match: {original_id} -> {best_match_id} (distance: {best_distance:.1f}px)")
+            return best_match_id
+        
+        # Create new stable ID
+        new_stable_id = self.stable_id_counter
+        self.stable_id_counter += 1
+        
+        self.persistent_id_mapping[original_id] = new_stable_id
+        self.id_position_history[new_stable_id] = [detection_center]
+        
+        self.logger.info(f"New stable ID: {original_id} -> {new_stable_id}")
+        return new_stable_id
+
+    def _get_consolidated_id_bkp(self, detection: Dict, current_gps: Optional['GPSData']) -> int:
+        """Get consolidated track ID for detection"""
+        original_id = detection['track_id']
+        
+        # If we've seen this original ID before, return its mapping
+        if original_id in self.id_mapping:
+            return self.id_mapping[original_id]
+        
+        # Check if this detection is close to any existing tracks (if we have GPS)
+        if current_gps:
+            detection_gps = self._estimate_detection_gps(detection, current_gps)
+            
+            if detection_gps:
+                # Find existing tracks within distance threshold
+                for existing_id, positions in self.track_positions.items():
+                    if not positions:
+                        continue
+                    
+                    # Check distance to most recent position
+                    recent_pos = positions[-1]
+                    distance = self._gps_distance(
+                        detection_gps[0], detection_gps[1],
+                        recent_pos['lat'], recent_pos['lon']
+                    )
+                    
+                    if distance <= self.distance_threshold:
+                        # Merge with existing track
+                        self.id_mapping[original_id] = existing_id
+                        
+                        # Add position to existing track
+                        self.track_positions[existing_id].append({
+                            'lat': detection_gps[0],
+                            'lon': detection_gps[1],
+                            'frame': detection['frame']
+                        })
+                        
+                        self.logger.info(f"Merged track {original_id} into {existing_id} (distance: {distance:.1f}m)")
+                        return existing_id
+        
+        # This is a genuinely new track
+        new_consolidated_id = self.next_consolidated_id
+        self.id_mapping[original_id] = new_consolidated_id
+        self.next_consolidated_id += 1
+        
+        # Initialize position tracking
+        if current_gps:
+            detection_gps = self._estimate_detection_gps(detection, current_gps)
+            if detection_gps:
+                self.track_positions[new_consolidated_id] = [{
+                    'lat': detection_gps[0],
+                    'lon': detection_gps[1],
+                    'frame': detection['frame']
+                }]
+        
+        return new_consolidated_id
+    
+    def _estimate_detection_gps(self, detection: Dict, gps: 'GPSData') -> Optional[Tuple[float, float]]:
+        """Estimate GPS coordinates for detection (simplified version)"""
+        try:
+            bbox = detection['bbox']
+            bbox_height = bbox[3] - bbox[1]
+            
+            if bbox_height <= 0:
+                return None
+            
+            # Simple depth estimation
+            focal_length = 1400
+            lightpost_height = 4.0
+            estimated_depth = (lightpost_height * focal_length) / bbox_height
+            
+            # GPS calculation (simplified)
+            bbox_center_x = (bbox[0] + bbox[2]) / 2
+            image_width = 1920  # Assume standard width
+            
+            pixels_from_center = bbox_center_x - (image_width / 2)
+            degrees_per_pixel = 60.0 / image_width
+            bearing_offset = pixels_from_center * degrees_per_pixel
+            object_bearing = gps.heading + bearing_offset
+            
+            import math
+            lat_offset = (estimated_depth * math.cos(math.radians(object_bearing))) / 111000
+            lon_offset = (estimated_depth * math.sin(math.radians(object_bearing))) / (111000 * math.cos(math.radians(gps.latitude)))
+            
+            object_lat = gps.latitude + lat_offset
+            object_lon = gps.longitude + lon_offset
+            
+            return (object_lat, object_lon)
+            
+        except Exception:
+            return None
+    
+    def _calculate_iou(self, box1: np.ndarray, box2: np.ndarray) -> float:
+        """Calculate IoU between two bounding boxes"""
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+        
+        intersection = max(0, x2 - x1) * max(0, y2 - y1)
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        union = area1 + area2 - intersection
+        
+        return intersection / union if union > 0 else 0
+    
+    def _gps_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calculate distance between GPS points in meters"""
+        R = 6378137.0
+        lat1_rad = np.radians(lat1)
+        lat2_rad = np.radians(lat2)
+        dlat = np.radians(lat2 - lat1)
+        dlon = np.radians(lon2 - lon1)
+        
+        a = (np.sin(dlat/2)**2 + 
+             np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon/2)**2)
+        c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+        
+        return R * c
+    
+    def get_statistics(self) -> Dict:
+        """Get overlap fixing statistics"""
+        return {
+            'overlaps_removed': self.overlap_count,
+            'ids_consolidated': self.fixed_count,
+            'unique_tracks': len(set(self.id_mapping.values())),
+            'original_tracks': len(self.id_mapping)
+        }
 
 ================
 File: README.md
@@ -5256,737 +5205,6 @@ def analyze_tracking_gaps(kalman_trackers: List[KalmanBoxTracker]) -> dict:
     }
 
 ================
-File: argus_track/utils/smart_track_manager.py
-================
-# argus_track/utils/clean_track_manager.py
-
-"""
-Clean Track Manager - GPS-informed tracking without complexity
-============================================================
-
-Focused track management that uses GPS movement context to solve:
-- Track fragmentation 
-- Track ID resurrection
-- Duplicate ID assignment
-
-GPS Movement Logic:
-- If vehicle moved forward > 50m, don't reuse old track IDs
-- If vehicle is stationary, allow limited track reappearance  
-- Conservative ID management for forward motion
-"""
-
-import numpy as np
-from typing import List, Dict, Optional, Set, Any
-from dataclasses import dataclass, field
-import logging
-import time
-from ..utils.gps_motion_prediction import MotionPredictor, create_motion_prediction_config, VehicleMovement
-from ..core import Detection
-from ..config import TrackerConfig
-
-
-@dataclass
-class TrackMemory:
-    """Simple track memory without complex features"""
-    track_id: int
-    last_seen_frame: int
-    last_position: np.ndarray
-    detection_count: int = 0
-    confidence_history: List[float] = field(default_factory=list)
-    creation_time: float = field(default_factory=time.time)
-    last_update_time: float = field(default_factory=time.time)
-    
-    def update(self, detection: Detection, frame_id: int):
-        """Update track memory with new detection"""
-        self.last_position = detection.center
-        self.last_seen_frame = frame_id
-        self.detection_count += 1
-        self.last_update_time = time.time()
-        
-        self.confidence_history.append(detection.score)
-        if len(self.confidence_history) > 10:
-            self.confidence_history = self.confidence_history[-10:]
-
-
-class CleanTrackManager:
-    """
-    Clean track manager with GPS movement context
-    
-    Key principles:
-    1. Use GPS to understand vehicle movement
-    2. Prevent impossible track resurrections in forward motion
-    3. Conservative ID management 
-    4. Simple, predictable behavior
-    """
-    
-    def __init__(self, config: TrackerConfig):
-        """Initialize clean track manager"""
-        self.config = config
-        self.logger = logging.getLogger(f"{__name__}.CleanTrackManager")
-        
-        # Track memory storage
-        self.track_memories: Dict[int, TrackMemory] = {}
-        self.active_track_ids: Set[int] = set()
-        self.lost_track_ids: Set[int] = set()
-        
-        # GPS movement context
-        self.vehicle_speed: float = 0.0
-        self.total_distance_moved: float = 0.0
-        self.distance_since_last_cleanup: float = 0.0
-        
-        # ID management
-        self.next_track_id = 1
-        self.id_reuse_forbidden: Set[int] = set()  # IDs we should never reuse
-        
-        # Statistics
-        self.total_tracks_created = 0
-        self.total_tracks_lost = 0
-        self.total_resurrections_prevented = 0
-        self.fragmentation_fixes = 0
-        
-        self.track_positions = {}  # track_id -> last_known_position  
-        self.track_death_positions = {}  # track_id -> position_when_lost
-        self.forbidden_resurrections = set()  # track_ids that should never resurrect
-
-        self.motion_config = create_motion_prediction_config(
-        object_distance_m=30.0,
-        gps_accuracy_threshold_m=3.0, 
-        prediction_tolerance_px=15.0,
-        enable_debug=True
-        )
-        self.motion_predictor = MotionPredictor(self.motion_config)
-
-        # GPS context
-        self.current_gps = None
-        self.previous_gps = None
-        self.motion_predictions = {}
-        
-        self.logger.info("Motion prediction enabled in CleanTrackManager")
-
-        self.logger.info("Clean Track Manager initialized")
-    
-    def update_gps_context(self, current_gps, previous_gps=None):
-        """Update GPS context for motion prediction"""
-        # Don't overwrite previous_gps if we already have one from the actual previous frame
-        if self.current_gps is not None:
-            self.previous_gps = self.current_gps
-        
-        self.current_gps = current_gps
-        
-        # Only use passed previous_gps if we don't have context yet
-        if self.previous_gps is None and previous_gps is not None:
-            self.previous_gps = previous_gps
-        
-        self.logger.debug(f"GPS context updated: prev_time={getattr(self.previous_gps, 'timestamp', 'None')}, "
-                        f"curr_time={getattr(self.current_gps, 'timestamp', 'None')}")
-
-    def update_movement_context(self, vehicle_speed: float, 
-                               distance_moved: float, total_distance: float):
-        """Update GPS movement context for tracking decisions"""
-        self.vehicle_speed = vehicle_speed
-        self.total_distance_moved = total_distance
-        self.distance_since_last_cleanup += distance_moved
-        
-        # If we've moved forward significantly, mark old IDs as forbidden
-        if distance_moved > 10.0:  # 10 meters forward
-            self._mark_distant_tracks_as_forbidden()
-        
-        # Periodic cleanup based on distance
-        if self.distance_since_last_cleanup > 50.0:  # Every 50 meters
-            self._cleanup_distant_tracks()
-            self.distance_since_last_cleanup = 0.0
-    
-    def _calculate_association_tolerance(self) -> float:
-        """Calculate dynamic tolerance based on vehicle motion"""
-        base_tolerance = 25.0
-        
-        if self.vehicle_speed > 1.0:  # Vehicle moving
-            # Increase tolerance based on speed (max 2x for 10+ m/s)
-            speed_factor = min(2.0, 1.0 + (self.vehicle_speed / 10.0))
-            return base_tolerance * speed_factor
-        
-        return base_tolerance
-
-    def _generate_motion_predictions(self, frame_id: int) -> Dict[int, np.ndarray]:
-        """Generate pixel-space predictions and maintain track continuity"""
-        self.motion_predictions.clear()
-        
-        if self.previous_gps is None or self.current_gps is None:
-            self.logger.debug(f"Frame {frame_id}: No GPS data for motion prediction")
-            return {}
-        
-        # ENHANCED: Include lost tracks that might reappear
-        current_positions = {}
-        
-        # Add active tracks
-        for track_id in self.active_track_ids:
-            if track_id in self.track_positions:
-                current_positions[track_id] = self.track_positions[track_id]
-        
-        # NEW: Add recently lost tracks (within 60 frames = ~6 seconds)
-        recently_lost_tracks = {}
-        for track_id in list(self.lost_track_ids):
-            if track_id in self.track_memories:
-                memory = self.track_memories[track_id]
-                frames_since_lost = frame_id - memory.last_seen_frame
-                
-                # Keep recently lost tracks alive with predictions
-                if frames_since_lost <= 60 and track_id in self.track_positions:
-                    recently_lost_tracks[track_id] = self.track_positions[track_id]
-                    self.logger.debug(f"Frame {frame_id}: Including lost track {track_id} "
-                                    f"in predictions (lost {frames_since_lost} frames ago)")
-        
-        # Combine active and recently lost
-        all_positions = {**current_positions, **recently_lost_tracks}
-        
-        if not all_positions:
-            self.logger.debug(f"Frame {frame_id}: No track positions for prediction")
-            return {}
-        
-        try:
-            # Use existing MotionPredictor
-            predictions = self.motion_predictor.predict_object_positions(
-                self.previous_gps, self.current_gps, all_positions
-            )
-            
-            # Store for debugging and extract positions
-            self.motion_predictions = predictions
-            predicted_positions = {}
-            
-            for track_id, info in predictions.items():
-                predicted_positions[track_id] = info['predicted_position']
-                confidence = info['confidence']
-                
-                # NEW: Reactivate lost tracks with good predictions
-                if track_id in recently_lost_tracks and confidence > 0.6:
-                    self.logger.info(f"Frame {frame_id}: Reactivating lost track {track_id} "
-                                f"with prediction confidence {confidence:.2f}")
-                    self.lost_track_ids.discard(track_id)
-                    self.active_track_ids.add(track_id)
-                    
-                    # Update position with prediction
-                    self.track_positions[track_id] = predicted_positions[track_id]
-                
-                self.logger.debug(f"Frame {frame_id}: Track {track_id} predicted at "
-                                f"{predicted_positions[track_id]} (conf: {confidence:.2f})")
-            
-            return predicted_positions
-            
-        except Exception as e:
-            self.logger.error(f"Motion prediction failed: {e}")
-            return {}
-
-    def _generate_motion_predictions_bkp(self, frame_id: int) -> Dict[int, np.ndarray]:
-        """Generate pixel-space predictions for active tracks"""
-        self.motion_predictions.clear()
-        
-        if self.previous_gps is None or self.current_gps is None:
-            self.logger.debug(f"Frame {frame_id}: No GPS data for motion prediction")
-            return {}
-        
-        # Get current track positions
-        current_positions = {}
-
-        for track_id in self.active_track_ids:
-            if track_id in self.track_positions:
-                current_positions[track_id] = self.track_positions[track_id]
-        
-        if not current_positions:
-            self.logger.debug(f"Frame {frame_id}: No active track positions")
-            return {}
-        
-        try:
-            # Use existing MotionPredictor
-            predictions = self.motion_predictor.predict_object_positions(
-                self.previous_gps, self.current_gps, current_positions
-            )
-            
-            # Store for debugging and extract positions
-            self.motion_predictions = predictions
-            predicted_positions = {}
-            
-            for track_id, info in predictions.items():
-                predicted_positions[track_id] = info['predicted_position']
-                confidence = info['confidence']
-                self.logger.debug(f"Frame {frame_id}: Track {track_id} predicted at {predicted_positions[track_id]} (conf: {confidence:.2f})")
-            
-            return predicted_positions
-            
-        except Exception as e:
-            self.logger.error(f"Motion prediction failed: {e}")
-            return {}
-
-    def process_frame_detections(self, detections: List[Detection], 
-                                frame_id: int, timestamp: float) -> List[Detection]:
-        """
-        Process frame detections with GPS-informed track management
-        
-        Args:
-            detections: Raw detections from overlap fixer
-            frame_id: Current frame ID
-            timestamp: Frame timestamp
-            
-        Returns:
-            Detections with clean track IDs
-        """
-        processed_detections = []
-        
-        for detection in detections:
-            original_track_id = detection.track_id
-            
-            # Check if this track ID should be reused
-            clean_track_id = self._get_clean_track_id(original_track_id, detection, frame_id)
-            
-            # Update detection with clean ID
-            detection.track_id = clean_track_id
-            processed_detections.append(detection)
-            
-            # Update track memory
-            self._update_track_memory(detection, frame_id)
-        
-        if frame_id % 20 == 0:
-            self._cleanup_old_tracks()
-
-        self._handle_lost_tracks(frame_id)
-        
-        return processed_detections
-    
-    def _handle_resurrection_and_new_tracks(self, original_id: int, detection: Detection, frame_id: int) -> int:
-        """Handle resurrection logic and new track creation with more lenient rules"""
-        
-        # Check if this is a forbidden resurrection
-        if original_id in getattr(self, 'forbidden_resurrections', set()):
-            new_id = self._assign_new_track_id()
-            self.total_resurrections_prevented += 1
-            self.logger.info(f"Frame {frame_id}: Prevented forbidden resurrection {original_id} -> {new_id}")
-            return new_id
-        
-        # Enhanced resurrection check - be more lenient for recent tracks
-        if original_id in self.lost_track_ids:
-            if self._resurrection_makes_spatial_sense_enhanced(original_id, detection, frame_id):
-                # Allow resurrection
-                self.lost_track_ids.discard(original_id)
-                self.active_track_ids.add(original_id)
-                self.logger.info(f"Frame {frame_id}: Allowed logical resurrection {original_id}")
-                return original_id
-            else:
-                # Block resurrection but be less aggressive
-                self.forbidden_resurrections.add(original_id)
-                new_id = self._assign_new_track_id()
-                self.total_resurrections_prevented += 1
-                self.logger.info(f"Frame {frame_id}: Prevented illogical resurrection {original_id} -> {new_id}")
-                return new_id
-        
-        # Create new track
-        new_id = self._assign_new_track_id()
-        return new_id
-
-    def _resurrection_makes_spatial_sense_enhanced(self, track_id: int, detection: Detection, frame_id: int) -> bool:
-        """Enhanced spatial sense check for resurrections"""
-        
-        if track_id not in self.track_death_positions:
-            # If we don't know where it died, be more lenient
-            return True
-        
-        death_position = self.track_death_positions[track_id]
-        new_position = detection.center
-        distance = np.linalg.norm(new_position - death_position)
-        
-        # MUCH more lenient tolerance - static objects can appear to move significantly due to:
-        # 1. Vehicle movement between frames
-        # 2. Camera angle changes
-        # 3. Detection box variations
-        max_allowed_distance = 100.0  # Increased from 30px to 100px
-        
-        # Be even more lenient when vehicle is moving fast
-        if self.vehicle_speed > 2.0:
-            max_allowed_distance = 150.0  # Even higher tolerance for moving vehicle
-        
-        spatial_ok = distance <= max_allowed_distance
-        
-        if not spatial_ok:
-            self.logger.warning(f"Resurrection blocked: track {track_id} moved {distance:.1f}px "
-                            f"from death position (threshold: {max_allowed_distance:.1f}px)")
-        else:
-            self.logger.info(f"Resurrection allowed: track {track_id} moved {distance:.1f}px "
-                            f"within threshold {max_allowed_distance:.1f}px")
-        
-        return spatial_ok
-
-    def _handle_resurrection_and_new_tracks_bkp(self, original_id: int, detection: Detection, frame_id: int) -> int:
-        """Handle resurrection logic and new track creation (existing logic)"""
-
-        if original_id in self.forbidden_resurrections:
-            new_id = self._assign_new_track_id()
-            self.total_resurrections_prevented += 1
-            self.logger.info(f"Frame {frame_id}: Prevented forbidden resurrection {original_id} -> {new_id}")
-            return new_id
-        
-        # ENHANCED RESURRECTION CHECK: Only resurrect if spatially makes sense
-        if original_id in self.lost_track_ids:
-            if not self._resurrection_makes_spatial_sense(original_id, detection, frame_id):
-                # Block this resurrection and forbid future ones
-                self.forbidden_resurrections.add(original_id)
-                new_id = self._assign_new_track_id()
-                self.total_resurrections_prevented += 1
-                self.logger.info(f"Frame {frame_id}: Prevented illogical resurrection {original_id} -> {new_id}")
-                return new_id
-            else:
-                # Resurrection is OK - remove from lost tracks
-                self.lost_track_ids.discard(original_id)
-                self.active_track_ids.add(original_id)
-                self.logger.info(f"Frame {frame_id}: Allowed logical resurrection {original_id}")
-                return original_id
-        
-        # If this ID is forbidden (was problematic before), assign new one
-        if original_id in self.id_reuse_forbidden:
-            new_id = self._assign_new_track_id()
-            self.total_resurrections_prevented += 1
-            self.logger.info(f"Frame {frame_id}: Prevented reuse of forbidden ID {original_id} -> {new_id}")
-            return new_id
-        
-        # This appears to be a new track - use original ID if available
-        if original_id not in self.track_memories and original_id not in self.active_track_ids:
-            self.active_track_ids.add(original_id)
-            self.total_tracks_created += 1
-            return original_id
-        
-        # ID conflict - assign new one
-        new_id = self._assign_new_track_id()
-        self.total_tracks_created += 1
-        return new_id
-    
-    def _get_clean_track_id(self, original_id: int, detection: Detection, frame_id: int) -> int:
-        """Enhanced track ID assignment with motion prediction"""
-        detection_center = detection.center
-        
-        # PHASE 1: Try motion prediction matching (ENHANCED)
-        motion_predictions = self._generate_motion_predictions(frame_id)
-        
-        if motion_predictions:
-            best_match_id = None
-            best_distance = float('inf')
-            
-            for track_id, predicted_pos in motion_predictions.items():
-                distance = np.linalg.norm(detection_center - predicted_pos)
-                
-                # ENHANCED: More generous tolerance for motion predictions
-                tolerance = self.motion_config.prediction_tolerance_px
-                if self.current_vehicle_movement and self.current_vehicle_movement.speed_ms > 2.0:
-                    tolerance *= 2.0  # Double tolerance for fast movement
-                
-                if distance < tolerance and distance < best_distance:
-                    best_match_id = track_id
-                    best_distance = distance
-            
-            if best_match_id is not None:
-                # IMPORTANT: Reactivate the track if it was lost
-                if best_match_id in self.lost_track_ids:
-                    self.lost_track_ids.discard(best_match_id)
-                    self.active_track_ids.add(best_match_id)
-                    self.logger.info(f"Frame {frame_id}: Motion prediction reactivated track {best_match_id}")
-                
-                self.logger.info(f"Frame {frame_id}: Motion prediction match {original_id} -> {best_match_id} "
-                            f"(error: {best_distance:.1f}px)")
-                return best_match_id
-        
-        # Continue with existing fallback logic...
-        return self._get_fallback_track_id(original_id, detection, frame_id)
-
-    def _get_clean_track_id_bkp(self, original_id: int, detection: Detection, frame_id: int) -> int:
-        """Enhanced track ID assignment with motion prediction"""
-        detection_center = detection.center
-        
-        # PHASE 1: Try motion prediction matching first
-        motion_predictions = self._generate_motion_predictions(frame_id)
-        
-        if motion_predictions:
-            best_match_id = None
-            best_distance = float('inf')
-            
-            for track_id, predicted_pos in motion_predictions.items():
-                distance = np.linalg.norm(detection_center - predicted_pos)
-                
-                # Use motion prediction tolerance
-                if distance < self.motion_config.prediction_tolerance_px and distance < best_distance:
-                    best_match_id = track_id
-                    best_distance = distance
-            
-            if best_match_id is not None:
-                self.logger.info(f"Frame {frame_id}: Motion prediction match {original_id} -> {best_match_id} (error: {best_distance:.1f}px)")
-                return best_match_id
-        
-        # FALLBACK: Enhanced anti-fragmentation with dynamic tolerance
-        dynamic_tolerance = self._calculate_association_tolerance()
-        
-        for active_id in self.active_track_ids:
-            if active_id in self.track_positions:
-                distance = np.linalg.norm(detection_center - self.track_positions[active_id])
-                if distance < dynamic_tolerance:
-                    self.logger.info(f"Frame {frame_id}: Position-based match {original_id} -> {active_id} (distance: {distance:.1f}px)")
-                    return active_id
-        
-        # Continue with existing logic for resurrections and new tracks
-        return self._handle_resurrection_and_new_tracks(original_id, detection, frame_id)
-
-    def _should_allow_track_reappearance(self, track_id: int, detection: Detection, 
-                                       frame_id: int) -> bool:
-        """
-        Determine if track reappearance makes sense given GPS movement
-        
-        Logic:
-        - If vehicle is stationary or slow: allow reappearance
-        - If vehicle moved forward significantly: block reappearance
-        - Conservative approach for forward motion
-        """
-        if track_id not in self.track_memories:
-            return False
-        
-        track_memory = self.track_memories[track_id]
-        frames_since_lost = frame_id - track_memory.last_seen_frame
-        
-        # Don't allow very old tracks to reappear
-        if frames_since_lost > 30:  # ~3 seconds at 10fps
-            return False
-        
-        # GPS-based logic
-        if self.vehicle_speed < 1.0:  # Vehicle stationary/very slow
-            # Allow reappearance for stationary vehicle
-            # Object might have been temporarily occluded
-            return frames_since_lost <= 15  # 1.5 seconds
-        
-        elif self.vehicle_speed < 5.0:  # Vehicle moving slowly 
-            # More restrictive for slow movement
-            return frames_since_lost <= 10  # 1 second
-        
-        else:  # Vehicle moving fast (>5 m/s = 18 km/h)
-            # Very restrictive for fast movement
-            # Object should be behind the vehicle quickly
-            return frames_since_lost <= 5  # 0.5 seconds
-    
-    def _assign_new_track_id(self) -> int:
-        """Assign a new track ID that hasn't been used"""
-        while self.next_track_id in self.track_memories or self.next_track_id in self.id_reuse_forbidden:
-            self.next_track_id += 1
-        
-        new_id = self.next_track_id
-        self.next_track_id += 1
-        self.total_tracks_created += 1
-        
-        return new_id
-
-    def _resurrection_makes_spatial_sense(self, track_id: int, detection: Detection, frame_id: int) -> bool:
-        """Check if resurrecting this track makes spatial sense"""
-        
-        if track_id not in self.track_death_positions:
-            return False  # Don't know where it died, don't resurrect
-        
-        death_position = self.track_death_positions[track_id]
-        new_position = detection.center
-        
-        # Calculate distance from death position
-        distance = np.linalg.norm(new_position - death_position)
-        
-        # For light posts (static objects), should appear very close to where they "died"
-        max_allowed_distance = 30.0  # 30 pixels tolerance
-        
-        # If vehicle moved significantly, be more restrictive
-        if self.total_distance_moved > 10.0:  # 10 meters
-            max_allowed_distance = 15.0  # Only 15 pixels tolerance
-        
-        spatial_ok = distance <= max_allowed_distance
-        
-        if not spatial_ok:
-            self.logger.warning(f"Resurrection blocked: track {track_id} moved {distance:.1f}px from death position")
-        
-        return spatial_ok
-
-    def _update_track_memory(self, detection: Detection, frame_id: int):
-        """Enhanced track memory update with position tracking"""
-        
-        track_id = detection.track_id
-        
-        # Call original memory update logic
-        if track_id not in self.track_memories:
-            self.track_memories[track_id] = TrackMemory(
-                track_id=track_id,
-                last_seen_frame=frame_id,
-                last_position=detection.center
-            )
-            self.active_track_ids.add(track_id)
-        
-        # Update existing memory
-        self.track_memories[track_id].update(detection, frame_id)
-        
-        # ENHANCEMENT: Always track current position
-        self.track_positions[track_id] = detection.center.copy()
-
-    def _should_keep_track_alive(self, track_id: int, frame_id: int) -> bool:
-        """Determine if a track should be kept alive based on motion prediction"""
-        
-        if track_id not in self.track_memories:
-            return False
-        
-        memory = self.track_memories[track_id]
-        frames_since_seen = frame_id - memory.last_seen_frame
-        
-        # Keep tracks alive longer when vehicle is moving (they might reappear)
-        if self.vehicle_speed > 1.0:
-            max_frames_alive = 60  # 6 seconds at 10fps
-        else:
-            max_frames_alive = 30  # 3 seconds when stationary
-        
-        return frames_since_seen <= max_frames_alive
-
-    def _handle_lost_tracks(self, current_frame: int):
-        """Enhanced lost track handling with motion prediction"""
-        
-        # Find tracks that were updated this frame
-        current_active = set()
-        for track_id, memory in self.track_memories.items():
-            if memory.last_seen_frame == current_frame:
-                current_active.add(track_id)
-        
-        # Find tracks that should be marked as lost
-        potentially_lost = self.active_track_ids - current_active
-        
-        for track_id in potentially_lost:
-            # Check if we should keep this track alive
-            if self._should_keep_track_alive(track_id, current_frame):
-                self.logger.debug(f"Frame {current_frame}: Keeping track {track_id} alive for motion prediction")
-                continue  # Don't mark as lost yet
-            
-            # Mark as truly lost
-            self.active_track_ids.discard(track_id)
-            self.lost_track_ids.add(track_id)
-            
-            # Remember where this track "died"
-            if track_id in self.track_positions:
-                self.track_death_positions[track_id] = self.track_positions[track_id].copy()
-            
-            self.total_tracks_lost += 1
-            self.logger.debug(f"Track {track_id} lost at frame {current_frame}")
-
-    def _handle_lost_tracks_bkp(self, current_frame: int):
-        """Enhanced lost track handling with death position tracking"""
-        
-        # Find tracks that were updated this frame
-        current_active = set()
-        for track_id, memory in self.track_memories.items():
-            if memory.last_seen_frame == current_frame:
-                current_active.add(track_id)
-        
-        # Find newly lost tracks
-        newly_lost = self.active_track_ids - current_active
-        
-        for track_id in newly_lost:
-            # Move to lost tracks
-            self.active_track_ids.discard(track_id)
-            self.lost_track_ids.add(track_id)
-            
-            # ENHANCEMENT: Remember where this track "died"
-            if track_id in self.track_positions:
-                self.track_death_positions[track_id] = self.track_positions[track_id].copy()
-            
-            self.total_tracks_lost += 1
-            self.logger.debug(f"Track {track_id} lost at frame {current_frame}")
-
-    def _cleanup_old_tracks(self):
-        """Cleanup old track data to prevent memory bloat"""
-        
-        # Move very old lost tracks to forbidden resurrections
-        very_old_tracks = []
-        for track_id in self.lost_track_ids:
-            if track_id in self.track_memories:
-                memory = self.track_memories[track_id]
-                if hasattr(memory, 'last_seen_frame'):
-                    # If track was lost more than 30 frames ago, forbid resurrection
-                    current_frame = max([m.last_seen_frame for m in self.track_memories.values()])
-                    if current_frame - memory.last_seen_frame > 30:
-                        very_old_tracks.append(track_id)
-        
-        for track_id in very_old_tracks:
-            self.lost_track_ids.discard(track_id)
-            self.forbidden_resurrections.add(track_id)
-            self.logger.debug(f"Track {track_id} moved to forbidden resurrections (too old)")
-    
-    def _mark_distant_tracks_as_forbidden(self):
-        """Mark tracks as forbidden for reuse when vehicle moves forward significantly"""
-        # Mark lost tracks as forbidden if vehicle moved forward
-        if self.vehicle_speed > 2.0:  # Moving forward at reasonable speed
-            newly_forbidden = set()
-            
-            for track_id in self.lost_track_ids.copy():
-                if track_id in self.track_memories:
-                    # This track is now behind the vehicle, forbid reuse
-                    self.id_reuse_forbidden.add(track_id)
-                    newly_forbidden.add(track_id)
-            
-            # Remove from lost tracks (they're now forbidden)
-            self.lost_track_ids -= newly_forbidden
-            
-            if newly_forbidden:
-                self.logger.debug(f"Marked {len(newly_forbidden)} track IDs as forbidden due to forward movement")
-    
-    def _cleanup_distant_tracks(self):
-        """Cleanup tracks that are definitely behind the vehicle"""
-        # Remove very old tracks from memory
-        current_time = time.time()
-        to_remove = []
-        
-        for track_id, memory in self.track_memories.items():
-            age = current_time - memory.last_update_time
-            
-            # Remove tracks older than 30 seconds
-            if age > 30.0:
-                to_remove.append(track_id)
-        
-        for track_id in to_remove:
-            del self.track_memories[track_id]
-            self.active_track_ids.discard(track_id)
-            self.lost_track_ids.discard(track_id)
-            self.id_reuse_forbidden.add(track_id)  # Never reuse
-        
-        if to_remove:
-            self.logger.debug(f"Cleaned up {len(to_remove)} old tracks")
-        
-        # Limit forbidden set size (keep memory reasonable)
-        if len(self.id_reuse_forbidden) > 500:
-            # Remove oldest forbidden IDs
-            forbidden_list = sorted(list(self.id_reuse_forbidden))
-            self.id_reuse_forbidden = set(forbidden_list[-400:])  # Keep newest 400
-    
-    def get_statistics(self) -> Dict[str, Any]:
-
-        """Enhanced statistics with fragmentation and resurrection info"""
-        
-        # Your existing statistics
-        base_stats = {
-            'active_tracks': len(self.active_track_ids),
-            'lost_tracks': len(self.lost_track_ids),
-            'tracks_in_memory': len(self.track_memories),
-            'forbidden_ids': len(self.id_reuse_forbidden),
-            'total_tracks_created': self.total_tracks_created,
-            'total_tracks_lost': self.total_tracks_lost,
-            'resurrections_prevented': self.total_resurrections_prevented,
-            'next_track_id': self.next_track_id,
-            'vehicle_speed': self.vehicle_speed,
-            'distance_moved': self.total_distance_moved
-        }
-        
-        # ADD THESE NEW METRICS:
-        enhanced_stats = {
-            **base_stats,
-            'forbidden_resurrections': len(self.forbidden_resurrections),
-            'death_positions_tracked': len(self.track_death_positions),
-            'current_positions_tracked': len(self.track_positions),
-            'avg_tracks_per_frame': len(self.active_track_ids),
-            'resurrection_prevention_rate': len(self.forbidden_resurrections) / max(1, self.total_tracks_created)
-        }
-        
-        return enhanced_stats
-
-================
 File: argus_track/utils/__init__.py
 ================
 """Utility functions for ByteTrack system"""
@@ -6651,6 +5869,1021 @@ from .unique_tracker import UnifiedLightPostTracker
 __all__ = ["UnifiedLightPostTracker"]
 
 ================
+File: argus_track/utils/smart_track_manager.py
+================
+# argus_track/utils/clean_track_manager.py
+
+"""
+Clean Track Manager - GPS-informed tracking without complexity
+============================================================
+
+Focused track management that uses GPS movement context to solve:
+- Track fragmentation 
+- Track ID resurrection
+- Duplicate ID assignment
+
+GPS Movement Logic:
+- If vehicle moved forward > 50m, don't reuse old track IDs
+- If vehicle is stationary, allow limited track reappearance  
+- Conservative ID management for forward motion
+"""
+
+import numpy as np
+from typing import List, Dict, Optional, Set, Any
+from dataclasses import dataclass, field
+import logging
+import time
+from ..utils.gps_motion_prediction import MotionPredictor, create_motion_prediction_config, VehicleMovement
+from ..core import Detection
+from ..config import TrackerConfig
+
+
+@dataclass
+class TrackMemory:
+    """Simple track memory without complex features"""
+    track_id: int
+    last_seen_frame: int
+    last_position: np.ndarray
+    detection_count: int = 0
+    confidence_history: List[float] = field(default_factory=list)
+    creation_time: float = field(default_factory=time.time)
+    last_update_time: float = field(default_factory=time.time)
+    
+    def update(self, detection: Detection, frame_id: int):
+        """Update track memory with new detection"""
+        self.last_position = detection.center
+        self.last_seen_frame = frame_id
+        self.detection_count += 1
+        self.last_update_time = time.time()
+        
+        self.confidence_history.append(detection.score)
+        if len(self.confidence_history) > 10:
+            self.confidence_history = self.confidence_history[-10:]
+
+
+class CleanTrackManager:
+    """
+    Clean track manager with GPS movement context
+    
+    Key principles:
+    1. Use GPS to understand vehicle movement
+    2. Prevent impossible track resurrections in forward motion
+    3. Conservative ID management 
+    4. Simple, predictable behavior
+    """
+    # Temporal resurrection constants
+    MIN_DISTANCE_DIFFERENT_OBJECT_M = 12.0      # Vehicle travel distance to consider new object(15)
+    FORBID_DISTANCE_THRESHOLD_M = 20.0          # Distance to proactively forbid resurrections
+    MAX_TIME_SAME_OBJECT_S = 2.5                # Max time for same object resurrection(3)
+    FAST_SPEED_THRESHOLD_MS = 5.0               # Speed threshold for restrictive policy
+    STATIONARY_THRESHOLD_MS = 0.5               # Speed threshold for lenient policy
+    MAX_FRAMES_FAST_MOVING = 3                  # Max frames gap at high speed
+    MAX_FRAMES_SAME_POSITION = 5                # Max frames for same position resurrection
+    DETECTION_POSITION_TOLERANCE_PX = 50.0      # Tolerance for "same position"
+    
+    def __init__(self, config: TrackerConfig):
+        """Initialize clean track manager"""
+        self.config = config
+        self.logger = logging.getLogger(f"{__name__}.CleanTrackManager")
+        
+        # Track memory storage
+        self.track_memories: Dict[int, TrackMemory] = {}
+        self.active_track_ids: Set[int] = set()
+        self.lost_track_ids: Set[int] = set()
+        
+        # GPS movement context
+        self.vehicle_speed: float = 0.0
+        self.total_distance_moved: float = 0.0
+        self.distance_since_last_cleanup: float = 0.0
+        
+        # ID management
+        self.next_track_id = 1
+        self.id_reuse_forbidden: Set[int] = set()  # IDs we should never reuse
+        
+        # Statistics
+        self.total_tracks_created = 0
+        self.total_tracks_lost = 0
+        self.total_resurrections_prevented = 0
+        self.fragmentation_fixes = 0
+        
+        self.track_positions = {}  # track_id -> last_known_position  
+        self.track_death_positions = {}  # track_id -> position_when_lost
+        self.forbidden_resurrections = set()  # track_ids that should never resurrect
+
+        self.motion_config = create_motion_prediction_config(
+        object_distance_m=30.0,
+        gps_accuracy_threshold_m=3.0, 
+        prediction_tolerance_px=15.0,
+        enable_debug=True
+        )
+        self.motion_predictor = MotionPredictor(self.motion_config)
+
+        # GPS context
+        self.current_gps = None
+        self.previous_gps = None
+        # Initialize vehicle movement tracking
+        self.current_vehicle_movement = None
+        self.previous_vehicle_movement = None
+
+        self.motion_predictions = {}
+        
+        self.logger.info("Motion prediction enabled in CleanTrackManager")
+
+        self.logger.info("Clean Track Manager initialized")
+    
+    def update_gps_context(self, current_gps, previous_gps=None):
+        """Update GPS context for motion prediction"""
+        # Don't overwrite previous_gps if we already have one from the actual previous frame
+        if self.current_gps is not None:
+            self.previous_gps = self.current_gps
+        
+        self.current_gps = current_gps
+        
+        # Only use passed previous_gps if we don't have context yet
+        if self.previous_gps is None and previous_gps is not None:
+            self.previous_gps = previous_gps
+        
+        self.logger.debug(f"GPS context updated: prev_time={getattr(self.previous_gps, 'timestamp', 'None')}, "
+                        f"curr_time={getattr(self.current_gps, 'timestamp', 'None')}")
+
+    def update_movement_context_try(self, gps_data):
+        """Update movement context from GPS data"""
+        if gps_data:
+            # Calculate speed in m/s
+            speed_ms = getattr(gps_data, 'speed', 0.0) if gps_data else 0.0
+            
+            # Create a simple movement object
+            from collections import namedtuple
+            VehicleMovement = namedtuple('VehicleMovement', ['speed_ms'])
+            self.current_vehicle_movement = VehicleMovement(speed_ms=speed_ms)
+        else:
+            self.current_vehicle_movement = None
+
+    def update_movement_context(self, vehicle_speed: float, 
+                               distance_moved: float, total_distance: float):
+        """Update GPS movement context for tracking decisions"""
+        self.vehicle_speed = vehicle_speed
+        self.total_distance_moved = total_distance
+        self.distance_since_last_cleanup += distance_moved
+        
+        # If we've moved forward significantly, mark old IDs as forbidden
+        if distance_moved > 10.0:  # 10 meters forward
+            self._mark_distant_tracks_as_forbidden()
+        
+        # Periodic cleanup based on distance
+        if self.distance_since_last_cleanup > 50.0:  # Every 50 meters
+            self._cleanup_distant_tracks()
+            self.distance_since_last_cleanup = 0.0
+    
+    def _calculate_association_tolerance(self) -> float:
+        """Calculate dynamic tolerance based on vehicle motion"""
+        base_tolerance = 300.0
+        
+        if self.vehicle_speed > 1.0:  # Vehicle moving
+            # Increase tolerance based on speed (max 2x for 10+ m/s)
+            speed_factor = min(2.0, 1.0 + (self.vehicle_speed / 10.0))
+            return base_tolerance * speed_factor
+        
+        return base_tolerance
+
+    def _generate_motion_predictions(self, frame_id: int) -> Dict[int, np.ndarray]:
+        """Generate pixel-space predictions and maintain track continuity"""
+        self.motion_predictions.clear()
+        
+        if self.previous_gps is None or self.current_gps is None:
+            self.logger.debug(f"Frame {frame_id}: No GPS data for motion prediction")
+            return {}
+        
+        # ENHANCED: Include lost tracks that might reappear
+        current_positions = {}
+        
+        # Add active tracks
+        for track_id in self.active_track_ids:
+            if track_id in self.track_positions:
+                current_positions[track_id] = self.track_positions[track_id]
+        
+        # NEW: Add recently lost tracks (within 60 frames = ~6 seconds)
+        recently_lost_tracks = {}
+        for track_id in list(self.lost_track_ids):
+            if track_id in self.track_memories:
+                memory = self.track_memories[track_id]
+                frames_since_lost = frame_id - memory.last_seen_frame
+                
+                # Keep recently lost tracks alive with predictions
+                if frames_since_lost <= 60 and track_id in self.track_positions:
+                    recently_lost_tracks[track_id] = self.track_positions[track_id]
+                    self.logger.debug(f"Frame {frame_id}: Including lost track {track_id} "
+                                    f"in predictions (lost {frames_since_lost} frames ago)")
+        
+        # Combine active and recently lost
+        all_positions = {**current_positions, **recently_lost_tracks}
+        
+        if not all_positions:
+            self.logger.debug(f"Frame {frame_id}: No track positions for prediction")
+            return {}
+        
+        try:
+            # Use existing MotionPredictor
+            predictions = self.motion_predictor.predict_object_positions(
+                self.previous_gps, self.current_gps, all_positions
+            )
+            
+            # Store for debugging and extract positions
+            self.motion_predictions = predictions
+            predicted_positions = {}
+            
+            for track_id, info in predictions.items():
+                predicted_positions[track_id] = info['predicted_position']
+                confidence = info['confidence']
+                
+                # NEW: Reactivate lost tracks with good predictions
+                if track_id in recently_lost_tracks and confidence > 0.6:
+                    self.logger.info(f"Frame {frame_id}: Reactivating lost track {track_id} "
+                                f"with prediction confidence {confidence:.2f}")
+                    self.lost_track_ids.discard(track_id)
+                    self.active_track_ids.add(track_id)
+                    
+                    # Update position with prediction
+                    self.track_positions[track_id] = predicted_positions[track_id]
+                
+                self.logger.debug(f"Frame {frame_id}: Track {track_id} predicted at "
+                                f"{predicted_positions[track_id]} (conf: {confidence:.2f})")
+            
+            return predicted_positions
+            
+        except Exception as e:
+            self.logger.error(f"Motion prediction failed: {e}")
+            return {}
+
+    def _generate_motion_predictions_bkp(self, frame_id: int) -> Dict[int, np.ndarray]:
+        """Generate pixel-space predictions for active tracks"""
+        self.motion_predictions.clear()
+        
+        if self.previous_gps is None or self.current_gps is None:
+            self.logger.debug(f"Frame {frame_id}: No GPS data for motion prediction")
+            return {}
+        
+        # Get current track positions
+        current_positions = {}
+
+        for track_id in self.active_track_ids:
+            if track_id in self.track_positions:
+                current_positions[track_id] = self.track_positions[track_id]
+        
+        if not current_positions:
+            self.logger.debug(f"Frame {frame_id}: No active track positions")
+            return {}
+        
+        try:
+            # Use existing MotionPredictor
+            predictions = self.motion_predictor.predict_object_positions(
+                self.previous_gps, self.current_gps, current_positions
+            )
+            
+            # Store for debugging and extract positions
+            self.motion_predictions = predictions
+            predicted_positions = {}
+            
+            for track_id, info in predictions.items():
+                predicted_positions[track_id] = info['predicted_position']
+                confidence = info['confidence']
+                self.logger.debug(f"Frame {frame_id}: Track {track_id} predicted at {predicted_positions[track_id]} (conf: {confidence:.2f})")
+            
+            return predicted_positions
+            
+        except Exception as e:
+            self.logger.error(f"Motion prediction failed: {e}")
+            return {}
+
+    def process_frame_detections(self, detections: List[Detection], 
+                                frame_id: int, timestamp: float) -> List[Detection]:
+        """
+        Process frame detections with GPS-informed track management
+        
+        Args:
+            detections: Raw detections from overlap fixer
+            frame_id: Current frame ID
+            timestamp: Frame timestamp
+            
+        Returns:
+            Detections with clean track IDs
+        """
+        processed_detections = []
+        
+        for detection in detections:
+            original_track_id = detection.track_id
+            
+            # Check if this track ID should be reused
+            clean_track_id = self._get_clean_track_id(original_track_id, detection, frame_id)
+            
+            # Update detection with clean ID
+            detection.track_id = clean_track_id
+            processed_detections.append(detection)
+            
+            # Update track memory
+            self._update_track_memory(detection, frame_id)
+        
+        if frame_id % 20 == 0:
+            self._cleanup_old_tracks()
+
+        self._handle_lost_tracks(frame_id)
+        
+        return processed_detections
+    
+    def _handle_resurrection_and_new_tracks(self, original_id: int, detection: Detection, frame_id: int) -> int:
+        """Handle resurrection logic and new track creation with more lenient rules"""
+        
+        # Check if this is a forbidden resurrection
+        if original_id in getattr(self, 'forbidden_resurrections', set()):
+            new_id = self._assign_new_track_id()
+            self.total_resurrections_prevented += 1
+            self.logger.info(f"Frame {frame_id}: Prevented forbidden resurrection {original_id} -> {new_id}")
+            return new_id
+        
+        # Enhanced resurrection check - be more lenient for recent tracks
+        if original_id in self.lost_track_ids:
+            if self._resurrection_makes_spatial_sense_enhanced(original_id, detection, frame_id):
+                # Allow resurrection
+                self.lost_track_ids.discard(original_id)
+                self.active_track_ids.add(original_id)
+                self.logger.info(f"Frame {frame_id}: Allowed logical resurrection {original_id}")
+                return original_id
+            else:
+                # Block resurrection but be less aggressive
+                self.forbidden_resurrections.add(original_id)
+                new_id = self._assign_new_track_id()
+                self.total_resurrections_prevented += 1
+                self.logger.info(f"Frame {frame_id}: Prevented illogical resurrection {original_id} -> {new_id}")
+                return new_id
+        
+        # Create new track
+        new_id = self._assign_new_track_id()
+        return new_id
+
+    def _resurrection_makes_temporal_sense(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+
+        if track_id not in self.track_memories:
+            return False
+        
+        memory = self.track_memories[track_id]
+        frames_since_death = frame_id - memory.last_seen_frame
+        time_since_death = frames_since_death / 10.0  # seconds (assuming 10fps)
+        
+        # Calculate how far vehicle has traveled since track death
+        distance_traveled = self.vehicle_speed * time_since_death
+        
+        # CORE LOGIC: If vehicle has moved far enough, this CANNOT be the same object
+        
+        # For light posts and street infrastructure:
+        # - Typical spacing: 30-100 meters apart
+        # - If vehicle traveled >15m, likely a different object
+        
+        min_distance_for_new_object = 15.0  # meters
+        
+        if distance_traveled > min_distance_for_new_object:
+            self.logger.warning(f"Resurrection blocked: track {track_id} - vehicle traveled {distance_traveled:.1f}m "
+                            f"since death (>{min_distance_for_new_object}m = different object)")
+            return False
+        
+        # Additional check: Time-based cutoff
+        # Even at slow speeds, after enough time it's likely a different object
+        max_time_same_object = 3.0  # seconds
+        
+        if time_since_death > max_time_same_object:
+            self.logger.warning(f"Resurrection blocked: track {track_id} - {time_since_death:.1f}s since death "
+                            f"(>{max_time_same_object}s = different object)")
+            return False
+        
+        # If we get here, resurrection might be legitimate
+        return True
+
+    def _resurrection_makes_spatial_sense_enhanced(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+        """
+        ENHANCED: Spatial check that considers screen position reuse
+        """
+        
+        if track_id not in self.track_death_positions:
+            return False
+        
+        death_position = self.track_death_positions[track_id]
+        new_position = detection.center
+        distance = np.linalg.norm(new_position - death_position)
+        
+        # For same screen position resurrections, be more restrictive
+        if distance < 50.0:  # Very close to death position
+            
+            # This could be legitimate (same object reappearing) OR
+            # different object at same screen position
+            
+            # Use temporal logic to decide
+            if not self._resurrection_makes_temporal_sense(track_id, detection, frame_id):
+                return False
+            
+            # Additional check: if vehicle is moving, same position resurrections are suspicious
+            if self.vehicle_speed > 1.0:
+                
+                memory = self.track_memories[track_id]
+                frames_since_death = frame_id - memory.last_seen_frame
+                
+                # For moving vehicle, only allow very quick resurrections at same position
+                if frames_since_death > 5:  # 0.5 seconds
+                    self.logger.warning(f"Resurrection blocked: track {track_id} - same position after {frames_since_death} "
+                                    f"frames with moving vehicle (likely different object)")
+                    return False
+        
+        # For distant resurrections, use standard distance check
+        max_distance = 100.0  # Reasonable limit
+        if distance > max_distance:
+            self.logger.debug(f"Resurrection blocked: track {track_id} moved {distance:.1f}px (max: {max_distance})")
+            return False
+        
+        return True
+
+    def _resurrection_makes_spatial_sense_enhanced_bkp(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+        """Enhanced spatial sense check for resurrections"""
+        
+        if track_id not in self.track_death_positions:
+            # If we don't know where it died, be more lenient
+            return True
+        
+        death_position = self.track_death_positions[track_id]
+        new_position = detection.center
+        distance = np.linalg.norm(new_position - death_position)
+        
+        max_allowed_distance = 100.0  # Increased from 30px to 100px
+        
+        # Be even more lenient when vehicle is moving fast
+        if self.vehicle_speed > 2.0:
+            max_allowed_distance = 150.0  # Even higher tolerance for moving vehicle
+        
+        spatial_ok = distance <= max_allowed_distance
+        
+        if not spatial_ok:
+            self.logger.warning(f"Resurrection blocked: track {track_id} moved {distance:.1f}px "
+                            f"from death position (threshold: {max_allowed_distance:.1f}px)")
+        else:
+            self.logger.info(f"Resurrection allowed: track {track_id} moved {distance:.1f}px "
+                            f"within threshold {max_allowed_distance:.1f}px")
+        
+        return spatial_ok
+
+    def _proactive_forbid_distant_tracks(self, frame_id: int):
+        """
+        PROACTIVE: Forbid resurrections for tracks that are definitely behind us
+        """
+        
+        tracks_to_forbid = []
+        
+        for track_id in list(self.lost_track_ids):
+            if track_id in self.track_memories:
+                memory = self.track_memories[track_id]
+                frames_since_death = frame_id - memory.last_seen_frame
+                time_since_death = frames_since_death / 10.0
+                
+                # Calculate distance traveled since death
+                distance_traveled = self.vehicle_speed * time_since_death
+                
+                # If we've traveled far enough, this track is definitely behind us
+                forbid_distance = 20.0  # meters
+                
+                if distance_traveled > forbid_distance:
+                    tracks_to_forbid.append(track_id)
+        
+        # Move to forbidden resurrections
+        for track_id in tracks_to_forbid:
+            self.lost_track_ids.discard(track_id)
+            self.forbidden_resurrections.add(track_id)
+            self.logger.debug(f"Track {track_id} proactively forbidden - vehicle traveled "
+                            f"{self.vehicle_speed * (frame_id - self.track_memories[track_id].last_seen_frame) / 10.0:.1f}m")
+
+    def _resurrection_vehicle_context_check(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+        """
+        Check resurrection against vehicle movement context
+        """
+        
+        # If vehicle is stationary, allow more resurrections
+        if self.vehicle_speed < 0.5:
+            return True
+        
+        # If vehicle is moving fast, be very restrictive
+        if self.vehicle_speed > 5.0:
+            memory = self.track_memories[track_id]
+            frames_since_death = frame_id - memory.last_seen_frame
+            
+            # At high speed, only allow immediate resurrections (tracking gaps)
+            if frames_since_death > 3:  # 0.3 seconds
+                self.logger.debug(f"Resurrection blocked: track {track_id} - vehicle too fast ({self.vehicle_speed:.1f}m/s) "
+                                f"for {frames_since_death}-frame gap")
+                return False
+        
+        return True
+
+    def _enhanced_resurrection_check(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+        """
+        COMPREHENSIVE: Combine all resurrection checks
+        """
+        
+        # Check 1: Basic spatial sense (enhanced)
+        if not self._resurrection_makes_spatial_sense_enhanced(track_id, detection, frame_id):
+            return False
+        
+        # Check 2: Temporal sense (NEW - this is the key for your problem)
+        if not self._resurrection_makes_temporal_sense(track_id, detection, frame_id):
+            return False
+        
+        # Check 3: Vehicle context
+        if not self._resurrection_vehicle_context_check(track_id, detection, frame_id):
+            return False
+        
+        return True
+
+    def _handle_resurrection_and_new_tracks_bkp(self, original_id: int, detection: Detection, frame_id: int) -> int:
+        """Handle resurrection logic and new track creation (existing logic)"""
+
+        if original_id in self.forbidden_resurrections:
+            new_id = self._assign_new_track_id()
+            self.total_resurrections_prevented += 1
+            self.logger.info(f"Frame {frame_id}: Prevented forbidden resurrection {original_id} -> {new_id}")
+            return new_id
+        
+        # ENHANCED RESURRECTION CHECK: Only resurrect if spatially makes sense
+        if original_id in self.lost_track_ids:
+            if not self._resurrection_makes_spatial_sense(original_id, detection, frame_id):
+                # Block this resurrection and forbid future ones
+                self.forbidden_resurrections.add(original_id)
+                new_id = self._assign_new_track_id()
+                self.total_resurrections_prevented += 1
+                self.logger.info(f"Frame {frame_id}: Prevented illogical resurrection {original_id} -> {new_id}")
+                return new_id
+            else:
+                # Resurrection is OK - remove from lost tracks
+                self.lost_track_ids.discard(original_id)
+                self.active_track_ids.add(original_id)
+                self.logger.info(f"Frame {frame_id}: Allowed logical resurrection {original_id}")
+                return original_id
+        
+        # If this ID is forbidden (was problematic before), assign new one
+        if original_id in self.id_reuse_forbidden:
+            new_id = self._assign_new_track_id()
+            self.total_resurrections_prevented += 1
+            self.logger.info(f"Frame {frame_id}: Prevented reuse of forbidden ID {original_id} -> {new_id}")
+            return new_id
+        
+        # This appears to be a new track - use original ID if available
+        if original_id not in self.track_memories and original_id not in self.active_track_ids:
+            self.active_track_ids.add(original_id)
+            self.total_tracks_created += 1
+            return original_id
+        
+        # ID conflict - assign new one
+        new_id = self._assign_new_track_id()
+        self.total_tracks_created += 1
+        return new_id
+    
+    def _get_clean_track_id(self, original_id: int, detection: Detection, frame_id: int) -> int:
+        """Enhanced track ID assignment with motion prediction"""
+        detection_center = detection.center
+        
+        motion_predictions = self._generate_motion_predictions(frame_id)
+        
+        if motion_predictions:
+            best_match_id = None
+            best_distance = float('inf')
+            
+            for track_id, predicted_pos in motion_predictions.items():
+                distance = np.linalg.norm(detection_center - predicted_pos)
+                
+               
+                tolerance = self.motion_config.prediction_tolerance_px
+                if self.current_gps and hasattr(self.current_gps, 'speed') and self.current_gps.speed > 2.0:
+                    tolerance *= 2.0  # Double tolerance for fast movement
+                
+                if distance < tolerance and distance < best_distance:
+                    best_match_id = track_id
+                    best_distance = distance
+            
+            if best_match_id is not None:
+                # IMPORTANT: Reactivate the track if it was lost
+                if best_match_id in self.lost_track_ids:
+                    self.lost_track_ids.discard(best_match_id)
+                    self.active_track_ids.add(best_match_id)
+                    self.logger.info(f"Frame {frame_id}: Motion prediction reactivated track {best_match_id}")
+                
+                self.logger.info(f"Frame {frame_id}: Motion prediction match {original_id} -> {best_match_id} "
+                            f"(error: {best_distance:.1f}px)")
+                return best_match_id
+        
+        # Continue with existing fallback logic...
+        return self._get_fallback_track_id(original_id, detection, frame_id)
+
+    def _get_clean_track_id_bkp(self, original_id: int, detection: Detection, frame_id: int) -> int:
+        """Enhanced track ID assignment with motion prediction"""
+        detection_center = detection.center
+        
+        # PHASE 1: Try motion prediction matching first
+        motion_predictions = self._generate_motion_predictions(frame_id)
+        
+        if motion_predictions:
+            best_match_id = None
+            best_distance = float('inf')
+            
+            for track_id, predicted_pos in motion_predictions.items():
+                distance = np.linalg.norm(detection_center - predicted_pos)
+                
+                # Use motion prediction tolerance
+                if distance < self.motion_config.prediction_tolerance_px and distance < best_distance:
+                    best_match_id = track_id
+                    best_distance = distance
+            
+            if best_match_id is not None:
+                self.logger.info(f"Frame {frame_id}: Motion prediction match {original_id} -> {best_match_id} (error: {best_distance:.1f}px)")
+                return best_match_id
+        
+        # FALLBACK: Enhanced anti-fragmentation with dynamic tolerance
+        dynamic_tolerance = self._calculate_association_tolerance()
+        
+        for active_id in self.active_track_ids:
+            if active_id in self.track_positions:
+                distance = np.linalg.norm(detection_center - self.track_positions[active_id])
+                if distance < dynamic_tolerance:
+                    self.logger.info(f"Frame {frame_id}: Position-based match {original_id} -> {active_id} (distance: {distance:.1f}px)")
+                    return active_id
+        
+        # Continue with existing logic for resurrections and new tracks
+        return self._handle_resurrection_and_new_tracks(original_id, detection, frame_id)
+
+    def _should_allow_track_reappearance(self, track_id: int, detection: Detection, 
+                                       frame_id: int) -> bool:
+        """
+        Determine if track reappearance makes sense given GPS movement
+        
+        Logic:
+        - If vehicle is stationary or slow: allow reappearance
+        - If vehicle moved forward significantly: block reappearance
+        - Conservative approach for forward motion
+        """
+        if track_id not in self.track_memories:
+            return False
+        
+        track_memory = self.track_memories[track_id]
+        frames_since_lost = frame_id - track_memory.last_seen_frame
+        
+        # Don't allow very old tracks to reappear
+        if frames_since_lost > 30:  # ~3 seconds at 10fps
+            return False
+        
+        # GPS-based logic
+        if self.vehicle_speed < 1.0:  # Vehicle stationary/very slow
+            # Allow reappearance for stationary vehicle
+            # Object might have been temporarily occluded
+            return frames_since_lost <= 15  # 1.5 seconds
+        
+        elif self.vehicle_speed < 5.0:  # Vehicle moving slowly 
+            # More restrictive for slow movement
+            return frames_since_lost <= 10  # 1 second
+        
+        else:  # Vehicle moving fast (>5 m/s = 18 km/h)
+            # Very restrictive for fast movement
+            # Object should be behind the vehicle quickly
+            return frames_since_lost <= 5  # 0.5 seconds
+    
+    def _assign_new_track_id(self) -> int:
+        """Assign a new track ID that hasn't been used"""
+        while self.next_track_id in self.track_memories or self.next_track_id in self.id_reuse_forbidden:
+            self.next_track_id += 1
+        
+        new_id = self.next_track_id
+        self.next_track_id += 1
+        self.total_tracks_created += 1
+        
+        return new_id
+
+    def _resurrection_makes_spatial_sense_final(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+        """
+        FINAL VERSION: Replace your existing _resurrection_makes_spatial_sense method with this
+        """
+        return self._enhanced_resurrection_check(track_id, detection, frame_id)
+
+    def process_frame_detections_enhanced(self, detections: List[Detection], 
+                                        frame_id: int, timestamp: float) -> List[Detection]:
+        """
+        ENHANCED: Add proactive track forbidding to your existing method
+        """
+        
+        # ADDITION: Proactively forbid distant tracks
+        if frame_id % 10 == 0:  # Every 10 frames
+            self._proactive_forbid_distant_tracks(frame_id)
+        
+        # Continue with your existing logic...
+        processed_detections = []
+        
+        for detection in detections:
+            original_track_id = detection.track_id
+            clean_track_id = self._get_clean_track_id(original_track_id, detection, frame_id)
+            detection.track_id = clean_track_id
+            processed_detections.append(detection)
+            self._update_track_memory(detection, frame_id)
+        
+        if frame_id % 20 == 0:
+            self._cleanup_old_tracks()
+        
+        self._handle_lost_tracks(frame_id)
+        
+        return processed_detections
+
+    def _resurrection_makes_spatial_sense(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+        """Check if resurrecting this track makes spatial sense"""
+        
+        if track_id not in self.track_death_positions:
+            return False  # Don't know where it died, don't resurrect
+        
+        death_position = self.track_death_positions[track_id]
+        new_position = detection.center
+        
+        # Calculate distance from death position
+        distance = np.linalg.norm(new_position - death_position)
+        
+        # For light posts (static objects), should appear very close to where they "died"
+        max_allowed_distance = 30.0  # 30 pixels tolerance
+        
+        # If vehicle moved significantly, be more restrictive
+        if self.total_distance_moved > 10.0:  # 10 meters
+            max_allowed_distance = 15.0  # Only 15 pixels tolerance
+        
+        spatial_ok = distance <= max_allowed_distance
+        
+        if not spatial_ok:
+            self.logger.warning(f"Resurrection blocked: track {track_id} moved {distance:.1f}px from death position")
+        
+        return spatial_ok
+
+    def _update_track_memory(self, detection: Detection, frame_id: int):
+        """Enhanced track memory update with position tracking"""
+        
+        track_id = detection.track_id
+        
+        # Call original memory update logic
+        if track_id not in self.track_memories:
+            self.track_memories[track_id] = TrackMemory(
+                track_id=track_id,
+                last_seen_frame=frame_id,
+                last_position=detection.center
+            )
+            self.active_track_ids.add(track_id)
+        
+        # Update existing memory
+        self.track_memories[track_id].update(detection, frame_id)
+        
+        # ENHANCEMENT: Always track current position
+        self.track_positions[track_id] = detection.center.copy()
+
+    def _should_keep_track_alive(self, track_id: int, frame_id: int) -> bool:
+        """Determine if a track should be kept alive based on motion prediction"""
+        
+        if track_id not in self.track_memories:
+            return False
+        
+        memory = self.track_memories[track_id]
+        frames_since_seen = frame_id - memory.last_seen_frame
+        
+        # Keep tracks alive longer when vehicle is moving (they might reappear)
+        if self.vehicle_speed > 1.0:
+            max_frames_alive = 60  # 6 seconds at 10fps
+        else:
+            max_frames_alive = 30  # 3 seconds when stationary
+        
+        return frames_since_seen <= max_frames_alive
+
+    def _handle_lost_tracks(self, current_frame: int):
+        """Enhanced lost track handling with motion prediction"""
+        
+        # Find tracks that were updated this frame
+        current_active = set()
+        for track_id, memory in self.track_memories.items():
+            if memory.last_seen_frame == current_frame:
+                current_active.add(track_id)
+        
+        # Find tracks that should be marked as lost
+        potentially_lost = self.active_track_ids - current_active
+        
+        for track_id in potentially_lost:
+            # Check if we should keep this track alive
+            if self._should_keep_track_alive(track_id, current_frame):
+                self.logger.debug(f"Frame {current_frame}: Keeping track {track_id} alive for motion prediction")
+                continue  # Don't mark as lost yet
+            
+            # Mark as truly lost
+            self.active_track_ids.discard(track_id)
+            self.lost_track_ids.add(track_id)
+            
+            # Remember where this track "died"
+            if track_id in self.track_positions:
+                self.track_death_positions[track_id] = self.track_positions[track_id].copy()
+            
+            self.total_tracks_lost += 1
+            self.logger.debug(f"Track {track_id} lost at frame {current_frame}")
+
+    def _handle_lost_tracks_bkp(self, current_frame: int):
+        """Enhanced lost track handling with death position tracking"""
+        
+        # Find tracks that were updated this frame
+        current_active = set()
+        for track_id, memory in self.track_memories.items():
+            if memory.last_seen_frame == current_frame:
+                current_active.add(track_id)
+        
+        # Find newly lost tracks
+        newly_lost = self.active_track_ids - current_active
+        
+        for track_id in newly_lost:
+            # Move to lost tracks
+            self.active_track_ids.discard(track_id)
+            self.lost_track_ids.add(track_id)
+            
+            # ENHANCEMENT: Remember where this track "died"
+            if track_id in self.track_positions:
+                self.track_death_positions[track_id] = self.track_positions[track_id].copy()
+            
+            self.total_tracks_lost += 1
+            self.logger.debug(f"Track {track_id} lost at frame {current_frame}")
+
+    def _cleanup_old_tracks(self):
+        """Cleanup old track data to prevent memory bloat"""
+        
+        # Move very old lost tracks to forbidden resurrections
+        very_old_tracks = []
+        for track_id in self.lost_track_ids:
+            if track_id in self.track_memories:
+                memory = self.track_memories[track_id]
+                if hasattr(memory, 'last_seen_frame'):
+                    # If track was lost more than 30 frames ago, forbid resurrection
+                    current_frame = max([m.last_seen_frame for m in self.track_memories.values()])
+                    if current_frame - memory.last_seen_frame > 30:
+                        very_old_tracks.append(track_id)
+        
+        for track_id in very_old_tracks:
+            self.lost_track_ids.discard(track_id)
+            self.forbidden_resurrections.add(track_id)
+            self.logger.debug(f"Track {track_id} moved to forbidden resurrections (too old)")
+    
+    def _mark_distant_tracks_as_forbidden(self):
+        """Mark tracks as forbidden for reuse when vehicle moves forward significantly"""
+        # Mark lost tracks as forbidden if vehicle moved forward
+        if self.vehicle_speed > 2.0:  # Moving forward at reasonable speed
+            newly_forbidden = set()
+            
+            for track_id in self.lost_track_ids.copy():
+                if track_id in self.track_memories:
+                    # This track is now behind the vehicle, forbid reuse
+                    self.id_reuse_forbidden.add(track_id)
+                    newly_forbidden.add(track_id)
+            
+            # Remove from lost tracks (they're now forbidden)
+            self.lost_track_ids -= newly_forbidden
+            
+            if newly_forbidden:
+                self.logger.debug(f"Marked {len(newly_forbidden)} track IDs as forbidden due to forward movement")
+    
+    def _cleanup_distant_tracks(self):
+        """Cleanup tracks that are definitely behind the vehicle"""
+        # Remove very old tracks from memory
+        current_time = time.time()
+        to_remove = []
+        
+        for track_id, memory in self.track_memories.items():
+            age = current_time - memory.last_update_time
+            
+            # Remove tracks older than 30 seconds
+            if age > 30.0:
+                to_remove.append(track_id)
+        
+        for track_id in to_remove:
+            del self.track_memories[track_id]
+            self.active_track_ids.discard(track_id)
+            self.lost_track_ids.discard(track_id)
+            self.id_reuse_forbidden.add(track_id)  # Never reuse
+        
+        if to_remove:
+            self.logger.debug(f"Cleaned up {len(to_remove)} old tracks")
+        
+        # Limit forbidden set size (keep memory reasonable)
+        if len(self.id_reuse_forbidden) > 500:
+            # Remove oldest forbidden IDs
+            forbidden_list = sorted(list(self.id_reuse_forbidden))
+            self.id_reuse_forbidden = set(forbidden_list[-400:])  # Keep newest 400
+    
+    def _get_fallback_track_id_bkp(self, original_id: int, detection, frame_id: int) -> int:
+        """
+        Fallback track ID assignment when motion prediction fails
+        Uses existing position-based matching and resurrection logic
+        """
+        detection_center = detection.center
+        
+        # Step 1: Try to match with existing active tracks (anti-fragmentation)
+        for active_id in self.active_track_ids:
+            if active_id in self.track_positions:
+                distance = np.linalg.norm(detection_center - self.track_positions[active_id])
+                
+                # Use dynamic tolerance based on vehicle speed if available
+                base_tolerance = 300.0  # Base tolerance in pixels
+                speed_factor = getattr(self, 'vehicle_speed', 0) * 2.0  # Extra tolerance for movement
+                dynamic_tolerance = base_tolerance + min(speed_factor, 25.0)  # Cap the adjustment
+                
+                if distance < dynamic_tolerance:
+                    self.logger.info(f"Frame {frame_id}: Prevented fragmentation {original_id} -> {active_id}")
+                    return active_id
+        
+        # Step 2: Check for logical resurrection of lost tracks
+        if hasattr(self, 'previous_track_positions') and self.previous_track_positions:
+            for prev_id, prev_pos in self.previous_track_positions.items():
+                if prev_id not in self.active_track_ids:  # Track is currently lost
+                    distance = np.linalg.norm(detection_center - prev_pos)
+                    
+                    # Use resurrection distance threshold (should be defined in your class)
+                    resurrection_threshold = getattr(self, 'resurrection_distance_threshold', 50.0)
+                    
+                    if distance < resurrection_threshold:
+                        # Additional check: ensure track hasn't moved too far from death position
+                        if hasattr(self, 'track_death_positions') and prev_id in self.track_death_positions:
+                            death_pos = self.track_death_positions[prev_id]
+                            death_distance = np.linalg.norm(detection_center - death_pos)
+                            
+                            # Logical resurrection threshold (should be defined in your class)
+                            logical_threshold = getattr(self, 'logical_resurrection_threshold', 75.0)
+                            
+                            if death_distance < logical_threshold:
+                                self.logger.info(f"Frame {frame_id}: Allowed logical resurrection {prev_id}")
+                                # Remove from death positions since it's resurrected
+                                if hasattr(self, 'track_death_positions'):
+                                    del self.track_death_positions[prev_id]
+                                return prev_id
+                            else:
+                                self.logger.warning(f"Resurrection blocked: track {prev_id} moved {death_distance:.1f}px from death position")
+                                self.logger.info(f"Frame {frame_id}: Prevented illogical resurrection {prev_id} -> {original_id}")
+                                return original_id
+                        else:
+                            # Simple resurrection without death position check
+                            self.logger.info(f"Frame {frame_id}: Allowed logical resurrection {prev_id}")
+                            return prev_id
+        
+        # Step 3: Return original ID (new track)
+        self.logger.info(f"Frame {frame_id}: New track {original_id}")
+        return original_id
+
+    def _get_fallback_track_id(self, original_id: int, detection, frame_id: int) -> int:
+        """
+        FIXED: Fallback track ID assignment that USES temporal logic
+        """
+        detection_center = detection.center
+        
+        # Step 1: Try to match with existing active tracks (anti-fragmentation)
+        for active_id in self.active_track_ids:
+            if active_id in self.track_positions:
+                distance = np.linalg.norm(detection_center - self.track_positions[active_id])
+                
+                # Use dynamic tolerance based on vehicle speed
+                base_tolerance = 300.0  # Your working value
+                speed_factor = self.vehicle_speed * 2.0
+                dynamic_tolerance = base_tolerance + min(speed_factor, 25.0)
+                
+                if distance < dynamic_tolerance:
+                    self.logger.info(f"Frame {frame_id}: Prevented fragmentation {original_id} -> {active_id}")
+                    return active_id
+        
+        # Step 2: FIXED - Use your enhanced resurrection logic instead of bypassing it
+        return self._handle_resurrection_and_new_tracks(original_id, detection, frame_id)
+
+    def get_statistics(self) -> Dict[str, Any]:
+
+        """Enhanced statistics with fragmentation and resurrection info"""
+        
+        # Your existing statistics
+        base_stats = {
+            'active_tracks': len(self.active_track_ids),
+            'lost_tracks': len(self.lost_track_ids),
+            'tracks_in_memory': len(self.track_memories),
+            'forbidden_ids': len(self.id_reuse_forbidden),
+            'total_tracks_created': self.total_tracks_created,
+            'total_tracks_lost': self.total_tracks_lost,
+            'resurrections_prevented': self.total_resurrections_prevented,
+            'next_track_id': self.next_track_id,
+            'vehicle_speed': self.vehicle_speed,
+            'distance_moved': self.total_distance_moved
+        }
+        
+        # ADD THESE NEW METRICS:
+        enhanced_stats = {
+            **base_stats,
+            'forbidden_resurrections': len(self.forbidden_resurrections),
+            'death_positions_tracked': len(self.track_death_positions),
+            'current_positions_tracked': len(self.track_positions),
+            'avg_tracks_per_frame': len(self.active_track_ids),
+            'resurrection_prevention_rate': len(self.forbidden_resurrections) / max(1, self.total_tracks_created)
+        }
+        
+        return enhanced_stats
+
+================
 File: argus_track/__init__.py
 ================
 # argus_track/__init__.py - FIXED imports
@@ -6724,7 +6957,7 @@ class TrackerConfig:
     
     # === STATIC CAR DETECTION ===
     enable_static_car_detection: bool = True   # Enable static car frame skipping
-    static_movement_threshold_m: float = 0.9   # Minimum movement to consider moving
+    static_movement_threshold_m: float = 0.3   # Minimum movement to consider moving
     static_time_threshold_s: float = 5.0       # Time before starting to skip frames
     
     # === OUTPUT SETTINGS ===
@@ -6750,8 +6983,8 @@ class TrackerConfig:
             
             # Static car detection
             enable_static_car_detection=True,
-            static_movement_threshold_m=0.5,  # Very sensitive
-            static_time_threshold_s=3.0,      # Start skipping quickly
+            static_movement_threshold_m=0.05,  # Very sensitive
+            static_time_threshold_s=5.0,      # Start skipping quickly
             
             # Output settings
             export_json=True,
