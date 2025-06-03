@@ -58,6 +58,15 @@ class CleanTrackManager:
     3. Conservative ID management 
     4. Simple, predictable behavior
     """
+    # Temporal resurrection constants
+    MIN_DISTANCE_DIFFERENT_OBJECT_M = 15.0      # Vehicle travel distance to consider new object
+    FORBID_DISTANCE_THRESHOLD_M = 20.0          # Distance to proactively forbid resurrections
+    MAX_TIME_SAME_OBJECT_S = 3.0                # Max time for same object resurrection
+    FAST_SPEED_THRESHOLD_MS = 5.0               # Speed threshold for restrictive policy
+    STATIONARY_THRESHOLD_MS = 0.5               # Speed threshold for lenient policy
+    MAX_FRAMES_FAST_MOVING = 3                  # Max frames gap at high speed
+    MAX_FRAMES_SAME_POSITION = 5                # Max frames for same position resurrection
+    DETECTION_POSITION_TOLERANCE_PX = 50.0      # Tolerance for "same position"
     
     def __init__(self, config: TrackerConfig):
         """Initialize clean track manager"""
@@ -338,7 +347,86 @@ class CleanTrackManager:
         new_id = self._assign_new_track_id()
         return new_id
 
+    def _resurrection_makes_temporal_sense(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+
+        if track_id not in self.track_memories:
+            return False
+        
+        memory = self.track_memories[track_id]
+        frames_since_death = frame_id - memory.last_seen_frame
+        time_since_death = frames_since_death / 10.0  # seconds (assuming 10fps)
+        
+        # Calculate how far vehicle has traveled since track death
+        distance_traveled = self.vehicle_speed * time_since_death
+        
+        # CORE LOGIC: If vehicle has moved far enough, this CANNOT be the same object
+        
+        # For light posts and street infrastructure:
+        # - Typical spacing: 30-100 meters apart
+        # - If vehicle traveled >15m, likely a different object
+        
+        min_distance_for_new_object = 15.0  # meters
+        
+        if distance_traveled > min_distance_for_new_object:
+            self.logger.warning(f"Resurrection blocked: track {track_id} - vehicle traveled {distance_traveled:.1f}m "
+                            f"since death (>{min_distance_for_new_object}m = different object)")
+            return False
+        
+        # Additional check: Time-based cutoff
+        # Even at slow speeds, after enough time it's likely a different object
+        max_time_same_object = 3.0  # seconds
+        
+        if time_since_death > max_time_same_object:
+            self.logger.warning(f"Resurrection blocked: track {track_id} - {time_since_death:.1f}s since death "
+                            f"(>{max_time_same_object}s = different object)")
+            return False
+        
+        # If we get here, resurrection might be legitimate
+        return True
+
     def _resurrection_makes_spatial_sense_enhanced(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+        """
+        ENHANCED: Spatial check that considers screen position reuse
+        """
+        
+        if track_id not in self.track_death_positions:
+            return False
+        
+        death_position = self.track_death_positions[track_id]
+        new_position = detection.center
+        distance = np.linalg.norm(new_position - death_position)
+        
+        # For same screen position resurrections, be more restrictive
+        if distance < 50.0:  # Very close to death position
+            
+            # This could be legitimate (same object reappearing) OR
+            # different object at same screen position
+            
+            # Use temporal logic to decide
+            if not self._resurrection_makes_temporal_sense(track_id, detection, frame_id):
+                return False
+            
+            # Additional check: if vehicle is moving, same position resurrections are suspicious
+            if self.vehicle_speed > 1.0:
+                
+                memory = self.track_memories[track_id]
+                frames_since_death = frame_id - memory.last_seen_frame
+                
+                # For moving vehicle, only allow very quick resurrections at same position
+                if frames_since_death > 5:  # 0.5 seconds
+                    self.logger.warning(f"Resurrection blocked: track {track_id} - same position after {frames_since_death} "
+                                    f"frames with moving vehicle (likely different object)")
+                    return False
+        
+        # For distant resurrections, use standard distance check
+        max_distance = 100.0  # Reasonable limit
+        if distance > max_distance:
+            self.logger.debug(f"Resurrection blocked: track {track_id} moved {distance:.1f}px (max: {max_distance})")
+            return False
+        
+        return True
+
+    def _resurrection_makes_spatial_sense_enhanced_bkp(self, track_id: int, detection: Detection, frame_id: int) -> bool:
         """Enhanced spatial sense check for resurrections"""
         
         if track_id not in self.track_death_positions:
@@ -349,10 +437,6 @@ class CleanTrackManager:
         new_position = detection.center
         distance = np.linalg.norm(new_position - death_position)
         
-        # MUCH more lenient tolerance - static objects can appear to move significantly due to:
-        # 1. Vehicle movement between frames
-        # 2. Camera angle changes
-        # 3. Detection box variations
         max_allowed_distance = 100.0  # Increased from 30px to 100px
         
         # Be even more lenient when vehicle is moving fast
@@ -369,6 +453,76 @@ class CleanTrackManager:
                             f"within threshold {max_allowed_distance:.1f}px")
         
         return spatial_ok
+
+    def _proactive_forbid_distant_tracks(self, frame_id: int):
+        """
+        PROACTIVE: Forbid resurrections for tracks that are definitely behind us
+        """
+        
+        tracks_to_forbid = []
+        
+        for track_id in list(self.lost_track_ids):
+            if track_id in self.track_memories:
+                memory = self.track_memories[track_id]
+                frames_since_death = frame_id - memory.last_seen_frame
+                time_since_death = frames_since_death / 10.0
+                
+                # Calculate distance traveled since death
+                distance_traveled = self.vehicle_speed * time_since_death
+                
+                # If we've traveled far enough, this track is definitely behind us
+                forbid_distance = 20.0  # meters
+                
+                if distance_traveled > forbid_distance:
+                    tracks_to_forbid.append(track_id)
+        
+        # Move to forbidden resurrections
+        for track_id in tracks_to_forbid:
+            self.lost_track_ids.discard(track_id)
+            self.forbidden_resurrections.add(track_id)
+            self.logger.debug(f"Track {track_id} proactively forbidden - vehicle traveled "
+                            f"{self.vehicle_speed * (frame_id - self.track_memories[track_id].last_seen_frame) / 10.0:.1f}m")
+
+    def _resurrection_vehicle_context_check(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+        """
+        Check resurrection against vehicle movement context
+        """
+        
+        # If vehicle is stationary, allow more resurrections
+        if self.vehicle_speed < 0.5:
+            return True
+        
+        # If vehicle is moving fast, be very restrictive
+        if self.vehicle_speed > 5.0:
+            memory = self.track_memories[track_id]
+            frames_since_death = frame_id - memory.last_seen_frame
+            
+            # At high speed, only allow immediate resurrections (tracking gaps)
+            if frames_since_death > 3:  # 0.3 seconds
+                self.logger.debug(f"Resurrection blocked: track {track_id} - vehicle too fast ({self.vehicle_speed:.1f}m/s) "
+                                f"for {frames_since_death}-frame gap")
+                return False
+        
+        return True
+
+    def _enhanced_resurrection_check(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+        """
+        COMPREHENSIVE: Combine all resurrection checks
+        """
+        
+        # Check 1: Basic spatial sense (enhanced)
+        if not self._resurrection_makes_spatial_sense_enhanced(track_id, detection, frame_id):
+            return False
+        
+        # Check 2: Temporal sense (NEW - this is the key for your problem)
+        if not self._resurrection_makes_temporal_sense(track_id, detection, frame_id):
+            return False
+        
+        # Check 3: Vehicle context
+        if not self._resurrection_vehicle_context_check(track_id, detection, frame_id):
+            return False
+        
+        return True
 
     def _handle_resurrection_and_new_tracks_bkp(self, original_id: int, detection: Detection, frame_id: int) -> int:
         """Handle resurrection logic and new track creation (existing logic)"""
@@ -530,6 +684,39 @@ class CleanTrackManager:
         self.total_tracks_created += 1
         
         return new_id
+
+    def _resurrection_makes_spatial_sense_final(self, track_id: int, detection: Detection, frame_id: int) -> bool:
+        """
+        FINAL VERSION: Replace your existing _resurrection_makes_spatial_sense method with this
+        """
+        return self._enhanced_resurrection_check(track_id, detection, frame_id)
+
+    def process_frame_detections_enhanced(self, detections: List[Detection], 
+                                        frame_id: int, timestamp: float) -> List[Detection]:
+        """
+        ENHANCED: Add proactive track forbidding to your existing method
+        """
+        
+        # ADDITION: Proactively forbid distant tracks
+        if frame_id % 10 == 0:  # Every 10 frames
+            self._proactive_forbid_distant_tracks(frame_id)
+        
+        # Continue with your existing logic...
+        processed_detections = []
+        
+        for detection in detections:
+            original_track_id = detection.track_id
+            clean_track_id = self._get_clean_track_id(original_track_id, detection, frame_id)
+            detection.track_id = clean_track_id
+            processed_detections.append(detection)
+            self._update_track_memory(detection, frame_id)
+        
+        if frame_id % 20 == 0:
+            self._cleanup_old_tracks()
+        
+        self._handle_lost_tracks(frame_id)
+        
+        return processed_detections
 
     def _resurrection_makes_spatial_sense(self, track_id: int, detection: Detection, frame_id: int) -> bool:
         """Check if resurrecting this track makes spatial sense"""
@@ -712,7 +899,7 @@ class CleanTrackManager:
             forbidden_list = sorted(list(self.id_reuse_forbidden))
             self.id_reuse_forbidden = set(forbidden_list[-400:])  # Keep newest 400
     
-    def _get_fallback_track_id(self, original_id: int, detection, frame_id: int) -> int:
+    def _get_fallback_track_id_bkp(self, original_id: int, detection, frame_id: int) -> int:
         """
         Fallback track ID assignment when motion prediction fails
         Uses existing position-based matching and resurrection logic
@@ -769,6 +956,29 @@ class CleanTrackManager:
         # Step 3: Return original ID (new track)
         self.logger.info(f"Frame {frame_id}: New track {original_id}")
         return original_id
+
+    def _get_fallback_track_id(self, original_id: int, detection, frame_id: int) -> int:
+        """
+        FIXED: Fallback track ID assignment that USES temporal logic
+        """
+        detection_center = detection.center
+        
+        # Step 1: Try to match with existing active tracks (anti-fragmentation)
+        for active_id in self.active_track_ids:
+            if active_id in self.track_positions:
+                distance = np.linalg.norm(detection_center - self.track_positions[active_id])
+                
+                # Use dynamic tolerance based on vehicle speed
+                base_tolerance = 300.0  # Your working value
+                speed_factor = self.vehicle_speed * 2.0
+                dynamic_tolerance = base_tolerance + min(speed_factor, 25.0)
+                
+                if distance < dynamic_tolerance:
+                    self.logger.info(f"Frame {frame_id}: Prevented fragmentation {original_id} -> {active_id}")
+                    return active_id
+        
+        # Step 2: FIXED - Use your enhanced resurrection logic instead of bypassing it
+        return self._handle_resurrection_and_new_tracks(original_id, detection, frame_id)
 
     def get_statistics(self) -> Dict[str, Any]:
 
