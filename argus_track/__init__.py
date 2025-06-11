@@ -22,11 +22,11 @@ License: MIT
 """
 
 from argus_track.__version__ import __version__
-from argus_track.config import TrackerConfig, StaticCarConfig
-from argus_track.core import Detection, Track, GPSData
-from argus_track.trackers import UnifiedLightPostTracker
+from argus_track.config import StaticCarConfig, TrackerConfig
+from argus_track.core import Detection, GPSData, Track
 from argus_track.detectors import ObjectDetector
 from argus_track.detectors.yolov11 import YOLOv11Detector
+from argus_track.trackers import UnifiedLightPostTracker
 
 __all__ = [
     "__version__",
@@ -37,5 +37,5 @@ __all__ = [
     "GPSData",
     "UnifiedLightPostTracker",
     "YOLOv11Detector",
-    "ObjectDetector"
+    "ObjectDetector",
 ]
