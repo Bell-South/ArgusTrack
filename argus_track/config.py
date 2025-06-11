@@ -29,6 +29,7 @@ class TrackerConfig:
     # === OUTPUT SETTINGS ===
     export_json: bool = True  # Export JSON frame data
     export_csv: bool = True  # Export CSV GPS data
+    min_detections_for_export: int = 3  # Minimum detections to include in output
 
     @classmethod
     def create_for_unified_tracker(cls) -> "TrackerConfig":
