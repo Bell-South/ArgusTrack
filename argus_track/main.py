@@ -42,7 +42,7 @@ Examples:
     parser.add_argument(
         "--show-realtime",
         action="store_true",
-        default=True,
+        default=False,
         help="Show real-time visualization (default: True)",
     )
     parser.add_argument(

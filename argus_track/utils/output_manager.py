@@ -1,7 +1,7 @@
-# argus_track/utils/output_manager.py (NEW FILE)
+# argus_track/utils/output_manager.py - ENHANCED with GPS coordinates
 
 """
-Output Manager - Handles JSON and CSV export for simplified tracking
+Output Manager - Enhanced with GPS coordinates in JSON export
 """
 
 import csv
@@ -16,21 +16,16 @@ from ..core import Detection, GPSData
 
 @dataclass
 class FrameData:
-    """Data for a single processed frame"""
+    """Data for a single processed frame - ENHANCED with GPS"""
 
     frame_id: int
     timestamp: float
     detections: List[Detection]
     gps_data: Optional[GPSData] = None
 
-
 class OutputManager:
     """
-    Manages output file generation for simplified tracking
-
-    Outputs:
-    1. JSON file: Frame-by-frame detection data
-    2. CSV file: GPS data synchronized with frame IDs
+    Enhanced Output Manager with GPS coordinates in JSON export
     """
 
     def __init__(self, video_path: str, class_names: List[str]):
@@ -50,6 +45,7 @@ class OutputManager:
         self.processing_stats = {
             "total_frames_processed": 0,
             "total_detections": 0,
+            "frames_with_gps": 0,  # NEW: Track GPS availability
             "unique_track_ids": set(),
             "class_distribution": {},
             "processing_time": 0.0,
@@ -66,7 +62,7 @@ class OutputManager:
         gps_data: Optional[GPSData] = None,
     ):
         """
-        Add data for a processed frame
+        Add data for a processed frame - ENHANCED to track GPS availability
 
         Args:
             frame_id: Frame identifier
@@ -86,6 +82,10 @@ class OutputManager:
         self.processing_stats["total_detections"] += (
             len(detections) if detections else 0
         )
+        
+        # NEW: Track GPS availability
+        if gps_data is not None:
+            self.processing_stats["frames_with_gps"] += 1
 
         for detection in detections or []:
             self.processing_stats["unique_track_ids"].add(detection.track_id)
@@ -98,7 +98,7 @@ class OutputManager:
 
     def export_json(self, output_path: Optional[str] = None) -> str:
         """
-        Export frame data to JSON file
+        Export frame data to JSON file - ENHANCED with GPS coordinates
 
         Args:
             output_path: Custom output path (optional)
@@ -109,24 +109,31 @@ class OutputManager:
         if output_path is None:
             output_path = self.video_path.with_suffix(".json")
 
-        # Prepare JSON data
+        # Prepare JSON data - ENHANCED with GPS statistics
         json_data = {
             "metadata": {
                 "video_file": str(self.video_path),
                 "total_frames": self.processing_stats["total_frames_processed"],
                 "total_detections": self.processing_stats["total_detections"],
                 "unique_tracks": len(self.processing_stats["unique_track_ids"]),
+                "frames_with_gps": self.processing_stats["frames_with_gps"],  # NEW
+                "gps_coverage_percent": (  # NEW
+                    self.processing_stats["frames_with_gps"] / 
+                    max(1, self.processing_stats["total_frames_processed"]) * 100
+                ),
                 "class_names": self.class_names,
                 "class_distribution": self.processing_stats["class_distribution"],
-                "processing_method": "simplified_tracking_with_consolidation",
+                "processing_method": "unified_tracking_with_gps_coordinates",  # UPDATED
             },
             "frames": {},
         }
 
-        # Add frame data
+        # Add frame data - ENHANCED with GPS coordinates
         for frame_id, data in sorted(self.frame_data.items()):
             frame_key = f"frame_{frame_id}"
-            json_data["frames"][frame_key] = {
+            
+            # Build frame data structure
+            frame_json = {
                 "timestamp": data.timestamp,
                 "detections": [
                     {
@@ -144,11 +151,27 @@ class OutputManager:
                     for det in data.detections
                 ],
             }
+            
+            # NEW: Add GPS coordinates if available
+            if data.gps_data is not None:
+                frame_json["gps"] = {
+                    "latitude": float(data.gps_data.latitude),
+                    "longitude": float(data.gps_data.longitude),
+                    "altitude": float(data.gps_data.altitude),
+                    "heading": float(data.gps_data.heading),
+                    "accuracy": float(data.gps_data.accuracy),
+                }
+            else:
+                # Optional: Add null GPS field for consistency
+                frame_json["gps"] = None
+            
+            json_data["frames"][frame_key] = frame_json
 
         # Write JSON file
         with open(output_path, "w") as f:
             json.dump(json_data, f, indent=2)
 
+        # Enhanced logging with GPS statistics
         self.logger.info(f"📄 Exported frame data to JSON: {output_path}")
         self.logger.info(f"   Frames: {len(self.frame_data)}")
         self.logger.info(
@@ -157,12 +180,18 @@ class OutputManager:
         self.logger.info(
             f"   Unique tracks: {len(self.processing_stats['unique_track_ids'])}"
         )
+        # NEW: GPS coverage logging
+        gps_coverage = (
+            self.processing_stats["frames_with_gps"] / 
+            max(1, self.processing_stats["total_frames_processed"]) * 100
+        )
+        self.logger.info(f"   GPS coverage: {gps_coverage:.1f}% ({self.processing_stats['frames_with_gps']}/{self.processing_stats['total_frames_processed']} frames)")
 
         return str(output_path)
 
     def export_csv(self, output_path: Optional[str] = None) -> str:
         """
-        Export GPS data to CSV file
+        Export GPS data to CSV file - UNCHANGED (already working)
 
         Args:
             output_path: Custom output path (optional)
@@ -232,7 +261,7 @@ class OutputManager:
         self, json_path: Optional[str] = None, csv_path: Optional[str] = None
     ) -> tuple[str, str]:
         """
-        Export both JSON and CSV files
+        Export both JSON and CSV files - UNCHANGED
 
         Args:
             json_path: Custom JSON output path (optional)
@@ -247,14 +276,14 @@ class OutputManager:
         return json_output, csv_output
 
     def _get_class_name(self, class_id: int) -> str:
-        """Get class name from class ID"""
+        """Get class name from class ID - UNCHANGED"""
         if 0 <= class_id < len(self.class_names):
             return self.class_names[class_id]
         else:
             return f"unknown_class_{class_id}"
 
     def get_processing_summary(self) -> Dict[str, Any]:
-        """Get processing summary statistics"""
+        """Get processing summary statistics - ENHANCED with GPS stats"""
         return {
             "frames_processed": self.processing_stats["total_frames_processed"],
             "total_detections": self.processing_stats["total_detections"],
@@ -264,13 +293,15 @@ class OutputManager:
                 / max(1, self.processing_stats["total_frames_processed"])
             ),
             "class_distribution": dict(self.processing_stats["class_distribution"]),
-            "frames_with_gps": len(
-                [data for data in self.frame_data.values() if data.gps_data is not None]
+            "frames_with_gps": self.processing_stats["frames_with_gps"],  # NEW
+            "gps_coverage_percent": (  # NEW
+                self.processing_stats["frames_with_gps"] / 
+                max(1, self.processing_stats["total_frames_processed"]) * 100
             ),
         }
 
     def print_summary(self):
-        """Print processing summary to console"""
+        """Print processing summary to console - ENHANCED with GPS info"""
         summary = self.get_processing_summary()
 
         print("\n" + "=" * 50)
@@ -281,7 +312,8 @@ class OutputManager:
         print(f"🎯 Total detections: {summary['total_detections']}")
         print(f"🏷️  Unique tracks: {summary['unique_tracks']}")
         print(f"📊 Avg detections/frame: {summary['avg_detections_per_frame']:.1f}")
-        print(f"📍 Frames with GPS: {summary['frames_with_gps']}")
+        # NEW: GPS coverage information
+        print(f"📍 Frames with GPS: {summary['frames_with_gps']} ({summary['gps_coverage_percent']:.1f}%)")
 
         if summary["class_distribution"]:
             print("\n🏷️  Class Distribution:")
@@ -289,43 +321,3 @@ class OutputManager:
                 print(f"   {class_name}: {count}")
 
         print("=" * 50)
-
-    def create_sample_output(self) -> Dict[str, Any]:
-        """Create sample output structure for documentation"""
-        return {
-            "sample_json_structure": {
-                "metadata": {
-                    "video_file": "example_video.mp4",
-                    "total_frames": 150,
-                    "total_detections": 45,
-                    "unique_tracks": 8,
-                    "class_names": ["LED", "traffic_light", "street_lamp"],
-                    "class_distribution": {"LED": 30, "traffic_light": 15},
-                },
-                "frames": {
-                    "frame_6": {
-                        "timestamp": 0.1,
-                        "detections": [
-                            {
-                                "track_id": 1,
-                                "class": "LED",
-                                "class_id": 0,
-                                "bbox": [100.5, 200.3, 150.8, 280.1],
-                                "confidence": 0.85,
-                            }
-                        ],
-                    }
-                },
-            },
-            "sample_csv_structure": [
-                {
-                    "frame_id": 6,
-                    "timestamp": 0.1,
-                    "latitude": -34.758432,
-                    "longitude": -58.635219,
-                    "altitude": 25.4,
-                    "heading": 45.2,
-                    "accuracy": 1.0,
-                }
-            ],
-        }
