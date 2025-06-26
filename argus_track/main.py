@@ -1,8 +1,9 @@
+# argus_track/main.py
+
 import argparse
 import logging
 import time
 from pathlib import Path
-
 
 from argus_track import __version__
 from argus_track.config import TrackerConfig
@@ -11,16 +12,16 @@ from argus_track.utils import setup_logging
 
 
 def main():
-    """Main function for unified tracking"""
+    """Main function for unified tracking with enhanced GPS heading calculation"""
     parser = argparse.ArgumentParser(
         description=f"Argus Track: Unified Light Post Tracking System v{__version__}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Basic tracking with GPS movement context
+    # Basic tracking with enhanced GPS and real-time display
     python main.py input.mp4 --model model.pt --show-realtime
     
-    # Batch processing without visualization  
+    # Batch processing with enhanced GPS calculation
     python main.py input.mp4 --model model.pt --no-realtime
         """,
     )
@@ -92,7 +93,7 @@ Examples:
     setup_logging(log_file=args.log_file, level=log_level)
     logger = logging.getLogger(__name__)
 
-    logger.info(f"🚀 Argus Track v{__version__} - Unified Tracking")
+    logger.info(f"🚀 Argus Track v{__version__} - Enhanced GPS Tracking")
     logger.info(f"📹 Input video: {args.input_video}")
     logger.info(f"🤖 Model: {args.model}")
     logger.info(f"📺 Real-time display: {show_realtime}")
@@ -114,12 +115,12 @@ Examples:
         logger.info(f"   GPS frame interval: {config.gps_frame_interval}")
         logger.info(f"   Track memory age: {config.max_track_memory_age}")
 
-        # Extract GPS data from video (simplified)
-        logger.info("🗺️ Extracting GPS data from video metadata...")
+        # ENHANCED: Extract GPS data with fallback heading calculation
+        logger.info("🗺️ Extracting GPS data with enhanced heading calculation...")
         gps_data = None
 
         try:
-            # Try to import GPS extraction
+            # Import enhanced GPS extraction
             from argus_track.utils.gps_extraction import extract_gps_from_stereo_videos
 
             gps_data, extraction_method = extract_gps_from_stereo_videos(
@@ -130,17 +131,63 @@ Examples:
                 logger.info(
                     f"✅ Extracted {len(gps_data)} GPS points using {extraction_method}"
                 )
+                logger.info("🧭 Enhanced heading calculation applied when GPS metadata missing")
+                
+                # Log heading source statistics
+                first_few_points = gps_data[:5]
+                logger.info("📍 Sample GPS points with headings:")
+                for i, gps_point in enumerate(first_few_points):
+                    logger.info(
+                        f"   Point {i}: Lat={gps_point.latitude:.6f}, "
+                        f"Lon={gps_point.longitude:.6f}, Heading={gps_point.heading:.1f}°"
+                    )
             else:
                 logger.warning("⚠️ No GPS data found in video metadata")
 
         except ImportError:
             logger.warning(
-                "⚠️ GPS extraction not available - processing without GPS context"
+                "⚠️ Enhanced GPS extraction not available - trying basic extraction"
             )
-            gps_data = None
+            # Fallback to basic GPS extraction
+            try:
+                from argus_track.utils.gps_extraction import extract_gps_from_stereo_videos
+
+                gps_data, extraction_method = extract_gps_from_stereo_videos(
+                    args.input_video, args.input_video, method="auto"
+                )
+
+                if gps_data:
+                    logger.info(
+                        f"✅ Extracted {len(gps_data)} GPS points using {extraction_method} (basic)"
+                    )
+                else:
+                    logger.warning("⚠️ No GPS data found in video metadata")
+
+            except ImportError:
+                logger.warning(
+                    "⚠️ GPS extraction not available - processing without GPS context"
+                )
+                gps_data = None
         except Exception as e:
-            logger.error(f"❌ GPS extraction failed: {e}")
-            gps_data = None
+            logger.error(f"❌ Enhanced GPS extraction failed: {e}")
+            logger.info("🔄 Falling back to basic GPS extraction...")
+            
+            try:
+                from argus_track.utils.gps_extraction import extract_gps_from_stereo_videos
+
+                gps_data, extraction_method = extract_gps_from_stereo_videos(
+                    args.input_video, args.input_video, method="auto"
+                )
+
+                if gps_data:
+                    logger.info(
+                        f"✅ Extracted {len(gps_data)} GPS points using {extraction_method} (fallback)"
+                    )
+                else:
+                    logger.warning("⚠️ No GPS data found in video metadata")
+            except Exception as e2:
+                logger.error(f"❌ All GPS extraction methods failed: {e2}")
+                gps_data = None
 
         # Initialize unified tracker
         tracker = UnifiedLightPostTracker(
@@ -184,10 +231,74 @@ Examples:
         )
         logger.info(f"   Vehicle distance: {track_stats['distance_moved']:.1f}m")
 
+        # Enhanced GPS heading statistics
+        if gps_data:
+            logger.info("🧭 GPS HEADING STATISTICS:")
+            logger.info(f"   Total GPS points: {len(gps_data)}")
+            logger.info(f"   GPS data available for tracking")
+            
+            # Show heading range
+            headings = [gps.heading for gps in gps_data if gps.heading != 0.0]
+            if headings:
+                logger.info(f"   Heading range: {min(headings):.1f}° to {max(headings):.1f}°")
+                
+                # Check for heading calculation vs metadata
+                if hasattr(gps_data[0], 'heading_source'):
+                    logger.info("   Heading sources in GPS data available")
+
+        # Frame processing statistics
+        logger.info("📅 FRAME PROCESSING STATISTICS:")
+        logger.info(f"   Frame interval: {config.gps_frame_interval}")
+        logger.info(f"   Expected frame naming: 0, {config.gps_frame_interval}, {config.gps_frame_interval*2}, ...")
+        logger.info(f"   Processed frames: {results['processed_frames']}")
+        logger.info(f"   Skipped (GPS sync): {results['skipped_frames_gps']}")
+        logger.info(f"   Skipped (Static car): {results['skipped_frames_static']}")
+
+        # Calculate efficiency
+        total_expected = results['total_frames'] // config.gps_frame_interval
+        efficiency = (1 - results['processed_frames'] / total_expected) * 100 if total_expected > 0 else 0
+        logger.info(f"   Processing efficiency: {efficiency:.1f}% reduction in frames")
+
         # Output files
         if not args.no_save and "json_output" in results:
-            logger.info(f"📄 JSON output: {results['json_output']}")
-            logger.info(f"📍 CSV output: {results['csv_output']}")
+            logger.info("📄 OUTPUT FILES:")
+            logger.info(f"   JSON: {results['json_output']}")
+            logger.info(f"   CSV: {results['csv_output']}")
+            
+            # Validate output frame naming
+            logger.info("✅ FRAME NAMING VALIDATION:")
+            try:
+                import json
+                with open(results['json_output'], 'r') as f:
+                    output_data = json.load(f)
+                
+                frame_keys = list(output_data.get('frames', {}).keys())
+                sample_frames = frame_keys[:5]
+                logger.info(f"   Sample JSON frame keys: {sample_frames}")
+                
+                # Extract frame numbers and validate
+                frame_numbers = []
+                for key in frame_keys:
+                    if key.startswith('frame_'):
+                        try:
+                            frame_num = int(key.split('_')[1])
+                            frame_numbers.append(frame_num)
+                        except (IndexError, ValueError):
+                            pass
+                
+                if frame_numbers:
+                    sorted_frames = sorted(frame_numbers)
+                    intervals_valid = all(
+                        frame % config.gps_frame_interval == 0 
+                        for frame in sorted_frames[:10]  # Check first 10
+                    )
+                    logger.info(f"   Frame intervals valid: {intervals_valid}")
+                    logger.info(f"   Sample frame numbers: {sorted_frames[:5]}")
+                else:
+                    logger.warning("   Could not extract frame numbers from JSON")
+                    
+            except Exception as e:
+                logger.warning(f"   Could not validate output frame naming: {e}")
 
         return 0
 
