@@ -1,7 +1,11 @@
 # argus_track/trackers/unified_lightpost_tracker.py
 
 """
-Unified Light Post Tracker con soporte para abort
+Unified Light Post Tracker - Clean, GPS-informed tracking
+=========================================================
+
+Combines best features from both trackers with GPS movement context
+to solve track fragmentation and resurrection issues.
 """
 
 import logging
@@ -24,7 +28,17 @@ from ..utils.visualization import RealTimeVisualizer
 
 class UnifiedLightPostTracker:
     """
-    Unified Light Post Tracker con soporte para abort desde Celery
+    Unified Light Post Tracker with GPS movement context
+
+    Clean, focused tracker that uses GPS to:
+    - Detect vehicle movement (skip stationary frames)
+    - Prevent impossible track resurrections (forward motion logic)
+    - Provide movement context for ID management
+
+    Solves:
+    - Track fragmentation
+    - Track ID resurrection
+    - Duplicate ID assignment
     """
 
     def __init__(
@@ -33,7 +47,6 @@ class UnifiedLightPostTracker:
         model_path: str,
         show_realtime: bool = False,
         display_size: Tuple[int, int] = (1280, 720),
-        abort_callback=None,  # <-- NUEVO PARÁMETRO
     ):
         """
         Initialize unified tracker
@@ -43,13 +56,11 @@ class UnifiedLightPostTracker:
             model_path: Path to YOLOv11 model
             show_realtime: Show real-time visualization
             display_size: Display window size
-            abort_callback: Callback function to check for abort signal
         """
         self.config = config
         self.model_path = model_path
         self.show_realtime = show_realtime
         self.display_size = display_size
-        self.abort_callback = abort_callback or (lambda: None)  # <-- GUARDAR CALLBACK
 
         # Initialize logger
         self.logger = logging.getLogger(f"{__name__}.UnifiedLightPostTracker")
@@ -98,15 +109,6 @@ class UnifiedLightPostTracker:
 
         self.logger.info("Unified Light Post Tracker initialized")
 
-    def _check_abort(self):
-        """Verifica si debe abortar el procesamiento"""
-        try:
-            self.abort_callback()
-        except Exception as e:
-            if "TaskRevokedError" in str(type(e).__name__):
-                self.logger.warning("⚠️ Abort signal received in tracker")
-                raise
-
     def process_video(
         self,
         video_path: str,
@@ -115,12 +117,18 @@ class UnifiedLightPostTracker:
         save_results: bool = True,
     ) -> Dict[str, Any]:
         """
-        Process video con soporte para abort
+        Process video with unified tracking
+
+        Args:
+            video_path: Path to input video
+            gps_data: Optional GPS data
+            output_path: Optional output video path
+            save_results: Whether to save results
+
+        Returns:
+            Processing results dictionary
         """
         self.logger.info(f"Starting unified tracking: {video_path}")
-
-        # Verificar abort al inicio
-        self._check_abort()
 
         # Open video
         cap = cv2.VideoCapture(video_path)
@@ -136,8 +144,6 @@ class UnifiedLightPostTracker:
         self.logger.info(
             f"Video: {total_frames} frames, {fps:.1f} FPS, {width}x{height}"
         )
-
-        self._check_abort()
 
         # Initialize GPS synchronizer
         if gps_data:
@@ -161,8 +167,6 @@ class UnifiedLightPostTracker:
                 output_path, fourcc, output_fps, (width, height)
             )
 
-        self._check_abort()
-
         # Processing loop
         current_frame_idx = 0
         processed_frames = 0
@@ -171,10 +175,6 @@ class UnifiedLightPostTracker:
 
         try:
             while True:
-                # Verificar abort cada 10 frames
-                if current_frame_idx % 10 == 0:
-                    self._check_abort()
-
                 ret, frame = cap.read()
                 if not ret:
                     break
@@ -266,6 +266,9 @@ class UnifiedLightPostTracker:
                     self.logger.info(
                         f"Progress: {progress:.1f}% | "
                         f"Processed: {processed_frames} | "
+                        f"Skipped (GPS): {skipped_frames_gps} | "
+                        f"Skipped (Static): {skipped_frames_static} | "
+                        f"Avg time: {avg_time*1000:.1f}ms | "
                         f"Speed: {self.vehicle_speed:.1f}m/s"
                     )
 
@@ -274,13 +277,8 @@ class UnifiedLightPostTracker:
         except KeyboardInterrupt:
             self.logger.info("Processing interrupted by user")
         except Exception as e:
-            # Detectar abort
-            if "TaskRevokedError" in str(type(e).__name__):
-                self.logger.info("Processing aborted by external signal")
-                raise
-            else:
-                self.logger.error(f"Error during processing: {e}")
-                raise
+            self.logger.error(f"Error during processing: {e}")
+            raise
         finally:
             # Cleanup
             cap.release()
@@ -308,12 +306,21 @@ class UnifiedLightPostTracker:
         self.logger.info("=== PROCESSING COMPLETE ===")
         self.logger.info(f"Total frames: {total_frames}")
         self.logger.info(f"Processed frames: {processed_frames}")
+        self.logger.info(f"Processing time: {total_time:.1f}s")
+        self.logger.info(f"Average FPS: {avg_fps:.1f}")
+
+        # Track manager statistics
+        track_stats = self.track_manager.get_statistics()
+        self.logger.info(f"Active tracks: {track_stats['active_tracks']}")
+        self.logger.info(f"Total tracks created: {track_stats['total_tracks_created']}")
 
         # Save results
         if save_results:
             json_path, csv_path = output_manager.export_both()
             results["json_output"] = json_path
             results["csv_output"] = csv_path
+
+            # Print summary
             output_manager.print_summary()
 
         return results
@@ -373,23 +380,23 @@ class UnifiedLightPostTracker:
     ) -> List[Detection]:
         """Process single frame with GPS-informed tracking"""
 
-        # Update GPS context
+        # NEW: Update GPS context for motion prediction
         if hasattr(self.track_manager, "update_gps_context"):
             self.track_manager.update_gps_context(self.current_gps, self.previous_gps)
 
-        # Run YOLO tracking
+        # Run YOLO tracking (existing code)
         track_params = self.config.get_ultralytics_track_params()
         results = self.model.track(frame, **track_params)
 
-        # Apply overlap fixer
+        # Apply overlap fixer (existing code)
         fixed_detections = self.overlap_fixer.fix_ultralytics_results(
             results[0], self.current_gps, frame_id
         )
 
-        # Convert to Detection objects
+        # Convert to Detection objects (existing code)
         raw_detections = self._convert_fixed_detections(fixed_detections, frame_id)
 
-        # Apply track management
+        # Apply GPS-informed track management (existing code)
         processed_detections = self.track_manager.process_frame_detections(
             raw_detections, frame_id, timestamp
         )
@@ -447,7 +454,7 @@ class UnifiedLightPostTracker:
                 "vehicle_speed_kmh": self.vehicle_speed * 3.6,
             }
 
-        # Convert detections to tracks
+        # Convert detections to tracks for visualization
         tracks = []
         for detection in detections:
 
@@ -520,7 +527,7 @@ class UnifiedLightPostTracker:
                 2,
             )
 
-        # Add GPS overlay
+        # Add GPS and movement info overlay
         if gps_data:
             info_lines = [
                 f"GPS: {gps_data.latitude:.6f}, {gps_data.longitude:.6f}",
@@ -540,6 +547,31 @@ class UnifiedLightPostTracker:
                     2,
                 )
                 y_offset += 30
+
+        # Add detection count
+        det_text = f"Detections: {len(detections)}"
+        cv2.putText(
+            vis_frame,
+            det_text,
+            (10, vis_frame.shape[0] - 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 0),
+            2,
+        )
+
+        # Add track statistics
+        track_stats = self.track_manager.get_statistics()
+        stats_text = f"Active Tracks: {track_stats['active_tracks']}"
+        cv2.putText(
+            vis_frame,
+            stats_text,
+            (10, vis_frame.shape[0] - 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 0),
+            2,
+        )
 
         return vis_frame
 

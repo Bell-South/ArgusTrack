@@ -11,23 +11,8 @@ from argus_track.trackers.unique_tracker import UnifiedLightPostTracker
 from argus_track.utils import setup_logging
 
 
-def main(check_abort_callback=None):
-    """
-    Main function con soporte para abort
-    
-    Args:
-        check_abort_callback: Función opcional para verificar abort desde Celery
-    """
-    
-    # Función helper para verificar abort
-    def check_abort():
-        if check_abort_callback:
-            try:
-                check_abort_callback()
-            except Exception as e:
-                if "TaskRevokedError" in str(type(e).__name__):
-                    raise
-    
+def main():
+    """Main function for unified tracking with enhanced GPS heading calculation"""
     parser = argparse.ArgumentParser(
         description=f"Argus Track: Unified Light Post Tracking System v{__version__}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -59,7 +44,7 @@ Examples:
         "--show-realtime",
         action="store_true",
         default=False,
-        help="Show real-time visualization (default: False)",
+        help="Show real-time visualization (default: True)",
     )
     parser.add_argument(
         "--no-realtime", action="store_true", help="Disable real-time visualization"
@@ -91,9 +76,6 @@ Examples:
 
     args = parser.parse_args()
 
-    # Verificar abort después de parsear argumentos
-    check_abort()
-
     # Validate input
     if not Path(args.input_video).exists():
         print(f"❌ Error: Input video not found: {args.input_video}")
@@ -117,8 +99,6 @@ Examples:
     logger.info(f"📺 Real-time display: {show_realtime}")
 
     try:
-        check_abort()
-        
         # Create simplified configuration
         config = TrackerConfig.create_for_unified_tracker()
 
@@ -135,13 +115,12 @@ Examples:
         logger.info(f"   GPS frame interval: {config.gps_frame_interval}")
         logger.info(f"   Track memory age: {config.max_track_memory_age}")
 
-        check_abort()
-
-        # Extract GPS data
-        logger.info("🗺️ Extracting GPS data...")
+        # ENHANCED: Extract GPS data with fallback heading calculation
+        logger.info("🗺️ Extracting GPS data with enhanced heading calculation...")
         gps_data = None
 
         try:
+            # Import enhanced GPS extraction
             from argus_track.utils.gps_extraction import extract_gps_from_stereo_videos
 
             gps_data, extraction_method = extract_gps_from_stereo_videos(
@@ -152,25 +131,70 @@ Examples:
                 logger.info(
                     f"✅ Extracted {len(gps_data)} GPS points using {extraction_method}"
                 )
+                logger.info("🧭 Enhanced heading calculation applied when GPS metadata missing")
+                
+                # Log heading source statistics
+                first_few_points = gps_data[:5]
+                logger.info("📍 Sample GPS points with headings:")
+                for i, gps_point in enumerate(first_few_points):
+                    logger.info(
+                        f"   Point {i}: Lat={gps_point.latitude:.6f}, "
+                        f"Lon={gps_point.longitude:.6f}, Heading={gps_point.heading:.1f}°"
+                    )
             else:
                 logger.warning("⚠️ No GPS data found in video metadata")
 
         except ImportError:
-            logger.warning("⚠️ GPS extraction not available")
-            gps_data = None
+            logger.warning(
+                "⚠️ Enhanced GPS extraction not available - trying basic extraction"
+            )
+            # Fallback to basic GPS extraction
+            try:
+                from argus_track.utils.gps_extraction import extract_gps_from_stereo_videos
+
+                gps_data, extraction_method = extract_gps_from_stereo_videos(
+                    args.input_video, args.input_video, method="auto"
+                )
+
+                if gps_data:
+                    logger.info(
+                        f"✅ Extracted {len(gps_data)} GPS points using {extraction_method} (basic)"
+                    )
+                else:
+                    logger.warning("⚠️ No GPS data found in video metadata")
+
+            except ImportError:
+                logger.warning(
+                    "⚠️ GPS extraction not available - processing without GPS context"
+                )
+                gps_data = None
         except Exception as e:
-            logger.error(f"❌ GPS extraction failed: {e}")
-            gps_data = None
+            logger.error(f"❌ Enhanced GPS extraction failed: {e}")
+            logger.info("🔄 Falling back to basic GPS extraction...")
+            
+            try:
+                from argus_track.utils.gps_extraction import extract_gps_from_stereo_videos
 
-        check_abort()
+                gps_data, extraction_method = extract_gps_from_stereo_videos(
+                    args.input_video, args.input_video, method="auto"
+                )
 
-        # Initialize unified tracker CON callback de abort
+                if gps_data:
+                    logger.info(
+                        f"✅ Extracted {len(gps_data)} GPS points using {extraction_method} (fallback)"
+                    )
+                else:
+                    logger.warning("⚠️ No GPS data found in video metadata")
+            except Exception as e2:
+                logger.error(f"❌ All GPS extraction methods failed: {e2}")
+                gps_data = None
+
+        # Initialize unified tracker
         tracker = UnifiedLightPostTracker(
             config=config,
             model_path=args.model,
             show_realtime=show_realtime,
             display_size=(1280, 720),
-            abort_callback=check_abort  # <-- PASAR CALLBACK
         )
 
         # Show helpful tips
@@ -179,8 +203,6 @@ Examples:
             logger.info("   - Press 'q' to quit")
             logger.info("   - Press 'p' to pause/resume")
             logger.info("   - Press 's' to save screenshot")
-
-        check_abort()
 
         # Process video
         start_time = time.time()
@@ -209,23 +231,74 @@ Examples:
         )
         logger.info(f"   Vehicle distance: {track_stats['distance_moved']:.1f}m")
 
-        # GPS heading statistics
+        # Enhanced GPS heading statistics
         if gps_data:
             logger.info("🧭 GPS HEADING STATISTICS:")
             logger.info(f"   Total GPS points: {len(gps_data)}")
             logger.info(f"   GPS data available for tracking")
+            
+            # Show heading range
+            headings = [gps.heading for gps in gps_data if gps.heading != 0.0]
+            if headings:
+                logger.info(f"   Heading range: {min(headings):.1f}° to {max(headings):.1f}°")
+                
+                # Check for heading calculation vs metadata
+                if hasattr(gps_data[0], 'heading_source'):
+                    logger.info("   Heading sources in GPS data available")
 
         # Frame processing statistics
         logger.info("📅 FRAME PROCESSING STATISTICS:")
+        logger.info(f"   Frame interval: {config.gps_frame_interval}")
+        logger.info(f"   Expected frame naming: 0, {config.gps_frame_interval}, {config.gps_frame_interval*2}, ...")
         logger.info(f"   Processed frames: {results['processed_frames']}")
         logger.info(f"   Skipped (GPS sync): {results['skipped_frames_gps']}")
         logger.info(f"   Skipped (Static car): {results['skipped_frames_static']}")
+
+        # Calculate efficiency
+        total_expected = results['total_frames'] // config.gps_frame_interval
+        efficiency = (1 - results['processed_frames'] / total_expected) * 100 if total_expected > 0 else 0
+        logger.info(f"   Processing efficiency: {efficiency:.1f}% reduction in frames")
 
         # Output files
         if not args.no_save and "json_output" in results:
             logger.info("📄 OUTPUT FILES:")
             logger.info(f"   JSON: {results['json_output']}")
             logger.info(f"   CSV: {results['csv_output']}")
+            
+            # Validate output frame naming
+            logger.info("✅ FRAME NAMING VALIDATION:")
+            try:
+                import json
+                with open(results['json_output'], 'r') as f:
+                    output_data = json.load(f)
+                
+                frame_keys = list(output_data.get('frames', {}).keys())
+                sample_frames = frame_keys[:5]
+                logger.info(f"   Sample JSON frame keys: {sample_frames}")
+                
+                # Extract frame numbers and validate
+                frame_numbers = []
+                for key in frame_keys:
+                    if key.startswith('frame_'):
+                        try:
+                            frame_num = int(key.split('_')[1])
+                            frame_numbers.append(frame_num)
+                        except (IndexError, ValueError):
+                            pass
+                
+                if frame_numbers:
+                    sorted_frames = sorted(frame_numbers)
+                    intervals_valid = all(
+                        frame % config.gps_frame_interval == 0 
+                        for frame in sorted_frames[:10]  # Check first 10
+                    )
+                    logger.info(f"   Frame intervals valid: {intervals_valid}")
+                    logger.info(f"   Sample frame numbers: {sorted_frames[:5]}")
+                else:
+                    logger.warning("   Could not extract frame numbers from JSON")
+                    
+            except Exception as e:
+                logger.warning(f"   Could not validate output frame naming: {e}")
 
         return 0
 
@@ -233,15 +306,11 @@ Examples:
         logger.info("❌ Processing interrupted by user (Ctrl+C)")
         return 1
     except Exception as e:
-        # Detectar si fue abort
-        if "TaskRevokedError" in str(type(e).__name__) or "aborted" in str(e).lower():
-            logger.info("❌ Processing aborted by user")
-            return 2  # Código especial para abort
-        else:
-            logger.error(f"❌ Error during processing: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return 1
+        logger.error(f"❌ Error during processing: {e}")
+        import traceback
+
+        logger.error(traceback.format_exc())
+        return 1
 
 
 if __name__ == "__main__":
