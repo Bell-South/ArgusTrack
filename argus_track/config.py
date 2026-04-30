@@ -2,12 +2,22 @@
 
 """Simplified Configuration for Unified Tracker"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+import torch
+
+
+def _default_device() -> str:
+    """Usa CUDA si hay GPU disponible, sino CPU."""
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 @dataclass
 class TrackerConfig:
     """Simplified configuration for unified light post tracker"""
+
+    # === DEVICE ===
+    device: str = field(default_factory=_default_device)  # GPU si disponible, sino CPU
 
     # === DETECTION PARAMETERS ===
     detection_conf: float = 0.20  # Detection confidence threshold
@@ -63,6 +73,7 @@ class TrackerConfig:
             "iou": self.detection_iou,
             "max_det": self.max_detections,
             "verbose": False,
+            "device": self.device,
         }
 
 
