@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+import torch
 from ultralytics import YOLO
 
 from ..config import TrackerConfig
@@ -58,6 +59,7 @@ class UnifiedLightPostTracker:
         self.model = YOLO(model_path)
         self.class_names = list(self.model.names.values())
         self.logger.info(f"Model classes: {self.class_names}")
+        self.logger.info(f"Device seleccionado: {config.device} (CUDA disponible: {torch.cuda.is_available()})")
 
         # Initialize core components
         self.track_manager = CleanTrackManager(config)
