@@ -20,7 +20,7 @@ class TrackerConfig:
     device: str = field(default_factory=_default_device)  # GPU si disponible, sino CPU
 
     # === DETECTION PARAMETERS ===
-    detection_conf: float = 0.20  # Detection confidence threshold
+    detection_conf: float = 0.15  # Detection confidence threshold
     detection_iou: float = 0.5  # NMS IoU threshold
     tracker_type: str = "bytetrack.yaml"  # Ultralytics tracker config
     max_detections: int = 10  # Max detections per frame
@@ -46,7 +46,7 @@ class TrackerConfig:
         """Create optimized configuration for unified tracker"""
         return cls(
             # Conservative detection settings
-            detection_conf=0.20,
+            detection_conf=0.15,
             detection_iou=0.5,
             tracker_type="bytetrack.yaml",
             max_detections=20,

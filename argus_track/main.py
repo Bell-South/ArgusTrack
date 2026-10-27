@@ -69,8 +69,8 @@ Examples:
     parser.add_argument(
         "--detection-conf",
         type=float,
-        default=0.20,
-        help="Detection confidence threshold (default: 0.20)",
+        default=0.15,
+        help="Detection confidence threshold (default: 0.15)",
     )
     parser.add_argument(
         "--gps-interval",
