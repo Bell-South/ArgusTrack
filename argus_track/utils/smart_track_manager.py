@@ -81,18 +81,6 @@ class CleanTrackManager:
         self.config = config
         self.logger = logging.getLogger(f"{__name__}.CleanTrackManager")
 
-        # Every "frames" constant below (MAX_FRAMES_FAST_MOVING, the 5/10/15/30
-        # thresholds, max_frames_alive, the /10.0 "assuming 10fps" time
-        # conversions) was written assuming frame_id advances by 1 per
-        # processed frame. It doesn't: only 1 video frame in every
-        # config.gps_frame_interval actually gets processed (the rest are
-        # skipped before ever reaching model.track()), so frame_id — which IS
-        # the raw video frame index — always jumps by that interval (e.g. 6).
-        # Scaling every threshold by it restores the real-world gap/time
-        # tolerance the original comments (e.g. "0.5 seconds", "6 seconds at
-        # 10fps") actually intended.
-        self._frame_step = max(1, int(getattr(config, "gps_frame_interval", 1) or 1))
-
         # Track memory storage
         self.track_memories: Dict[int, TrackMemory] = {}
         self.active_track_ids: Set[int] = set()
@@ -221,7 +209,7 @@ class CleanTrackManager:
                 frames_since_lost = frame_id - memory.last_seen_frame
 
                 # Keep recently lost tracks alive with predictions
-                if frames_since_lost <= 60 * self._frame_step and track_id in self.track_positions:
+                if frames_since_lost <= 60 and track_id in self.track_positions:
                     recently_lost_tracks[track_id] = self.track_positions[track_id]
                     self.logger.debug(
                         f"Frame {frame_id}: Including lost track {track_id} "
@@ -359,7 +347,7 @@ class CleanTrackManager:
 
         memory = self.track_memories[track_id]
         frames_since_death = frame_id - memory.last_seen_frame
-        time_since_death = frames_since_death / (10.0 * self._frame_step)  # seconds (assuming 10fps of actually-processed frames)
+        time_since_death = frames_since_death / 10.0  # seconds (assuming 10fps)
 
         # Calculate how far vehicle has traveled since track death
         distance_traveled = self.vehicle_speed * time_since_death
@@ -426,7 +414,7 @@ class CleanTrackManager:
                 frames_since_death = frame_id - memory.last_seen_frame
 
                 # For moving vehicle, only allow very quick resurrections at same position
-                if frames_since_death > self.MAX_FRAMES_SAME_POSITION * self._frame_step:  # 0.5 seconds
+                if frames_since_death > 5:  # 0.5 seconds
                     self.logger.warning(
                         f"Resurrection blocked: track {track_id} - same position after {frames_since_death} "
                         f"frames with moving vehicle (likely different object)"
@@ -454,7 +442,7 @@ class CleanTrackManager:
             if track_id in self.track_memories:
                 memory = self.track_memories[track_id]
                 frames_since_death = frame_id - memory.last_seen_frame
-                time_since_death = frames_since_death / (10.0 * self._frame_step)
+                time_since_death = frames_since_death / 10.0
 
                 # Calculate distance traveled since death
                 distance_traveled = self.vehicle_speed * time_since_death
@@ -471,7 +459,7 @@ class CleanTrackManager:
             self.forbidden_resurrections.add(track_id)
             self.logger.debug(
                 f"Track {track_id} proactively forbidden - vehicle traveled "
-                f"{self.vehicle_speed * (frame_id - self.track_memories[track_id].last_seen_frame) / (10.0 * self._frame_step):.1f}m"
+                f"{self.vehicle_speed * (frame_id - self.track_memories[track_id].last_seen_frame) / 10.0:.1f}m"
             )
 
     def _resurrection_vehicle_context_check(
@@ -491,7 +479,7 @@ class CleanTrackManager:
             frames_since_death = frame_id - memory.last_seen_frame
 
             # At high speed, only allow immediate resurrections (tracking gaps)
-            if frames_since_death > self.MAX_FRAMES_FAST_MOVING * self._frame_step:  # 0.3 seconds
+            if frames_since_death > 3:  # 0.3 seconds
                 self.logger.debug(
                     f"Resurrection blocked: track {track_id} - vehicle too fast ({self.vehicle_speed:.1f}m/s) "
                     f"for {frames_since_death}-frame gap"
@@ -586,23 +574,23 @@ class CleanTrackManager:
         frames_since_lost = frame_id - track_memory.last_seen_frame
 
         # Don't allow very old tracks to reappear
-        if frames_since_lost > 30 * self._frame_step:  # ~3 seconds at 10fps
+        if frames_since_lost > 30:  # ~3 seconds at 10fps
             return False
 
         # GPS-based logic
         if self.vehicle_speed < 1.0:  # Vehicle stationary/very slow
             # Allow reappearance for stationary vehicle
             # Object might have been temporarily occluded
-            return frames_since_lost <= 15 * self._frame_step  # 1.5 seconds
+            return frames_since_lost <= 15  # 1.5 seconds
 
         elif self.vehicle_speed < 5.0:  # Vehicle moving slowly
             # More restrictive for slow movement
-            return frames_since_lost <= 10 * self._frame_step  # 1 second
+            return frames_since_lost <= 10  # 1 second
 
         else:  # Vehicle moving fast (>5 m/s = 18 km/h)
             # Very restrictive for fast movement
             # Object should be behind the vehicle quickly
-            return frames_since_lost <= 5 * self._frame_step  # 0.5 seconds
+            return frames_since_lost <= 5  # 0.5 seconds
 
     def _assign_new_track_id(self) -> int:
         """Assign a new track ID that hasn't been used"""
@@ -687,9 +675,9 @@ class CleanTrackManager:
 
         # Keep tracks alive longer when vehicle is moving (they might reappear)
         if self.vehicle_speed > 1.0:
-            max_frames_alive = 60 * self._frame_step  # 6 seconds at 10fps
+            max_frames_alive = 60  # 6 seconds at 10fps
         else:
-            max_frames_alive = 30 * self._frame_step  # 3 seconds when stationary
+            max_frames_alive = 30  # 3 seconds when stationary
 
         return frames_since_seen <= max_frames_alive
 
