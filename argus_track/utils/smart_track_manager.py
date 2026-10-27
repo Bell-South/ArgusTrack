@@ -103,6 +103,14 @@ class CleanTrackManager:
 
         self.track_positions = {}  # track_id -> last_known_position
         self.track_death_positions = {}  # track_id -> position_when_lost
+        # track_id -> self.total_distance_moved at the moment it died. Lets
+        # resurrection checks compare the vehicle's actual accumulated travel
+        # (summed step by step, see unique_tracker.py's vehicle_moved_distance)
+        # instead of vehicle_speed * time_since_death — a single noisy
+        # instantaneous GPS-derived speed sample stretched over the whole gap,
+        # which can read near-zero from GPS jitter even while the vehicle has
+        # genuinely moved on, wrongly letting a resurrection through.
+        self.track_death_total_distance = {}
         self.forbidden_resurrections = set()  # track_ids that should never resurrect
 
         self.motion_config = create_motion_prediction_config(
@@ -349,8 +357,19 @@ class CleanTrackManager:
         frames_since_death = frame_id - memory.last_seen_frame
         time_since_death = frames_since_death / 10.0  # seconds (assuming 10fps)
 
-        # Calculate how far vehicle has traveled since track death
-        distance_traveled = self.vehicle_speed * time_since_death
+        # How far the vehicle has actually travelled since track death — the
+        # odometer reading now minus the one snapshotted when the track died
+        # (see track_death_total_distance in __init__/_handle_lost_tracks).
+        # Built from many small accumulated steps, so a single noisy GPS
+        # sample can't throw it off the way vehicle_speed * time_since_death
+        # could (one bad instantaneous speed reading, stretched over the
+        # whole gap). Falls back to the old speed-based estimate only if no
+        # odometer snapshot was recorded for this track (shouldn't normally
+        # happen — it's set whenever track_death_positions is).
+        if track_id in self.track_death_total_distance:
+            distance_traveled = self.total_distance_moved - self.track_death_total_distance[track_id]
+        else:
+            distance_traveled = self.vehicle_speed * time_since_death
 
         # CORE LOGIC: If vehicle has moved far enough, this CANNOT be the same object
 
@@ -710,6 +729,9 @@ class CleanTrackManager:
                 self.track_death_positions[track_id] = self.track_positions[
                     track_id
                 ].copy()
+            # Remember the vehicle's odometer reading at death too, for a
+            # noise-robust resurrection distance check (see __init__).
+            self.track_death_total_distance[track_id] = self.total_distance_moved
 
             self.total_tracks_lost += 1
             self.logger.debug(f"Track {track_id} lost at frame {current_frame}")
